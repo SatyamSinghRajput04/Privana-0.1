@@ -1,0 +1,47 @@
+import supabase from './_supabase.js';
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  try {
+    if (req.method === 'GET') {
+      const { workspace_id } = req.query;
+      // First try with the join
+      let q = supabase.from('viq_saved_analyses').select('*, viq_queries(question, chart_type, execution_ms)').order('pinned', { ascending: false }).order('created_at', { ascending: false });
+      if (workspace_id) q = q.eq('workspace_id', parseInt(workspace_id));
+      let { data, error } = await q;
+      
+      // If join fails, fetch without join
+      if (error) {
+        let q2 = supabase.from('viq_saved_analyses').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false });
+        if (workspace_id) q2 = q2.eq('workspace_id', parseInt(workspace_id));
+        const r2 = await q2;
+        if (r2.error) throw r2.error;
+        data = r2.data;
+      }
+      return res.status(200).json(data);
+    }
+    if (req.method === 'POST') {
+      const { workspace_id, title, query_id, notes } = req.body;
+      const { data, error } = await supabase.from('viq_saved_analyses').insert({ workspace_id, title, query_id, notes, pinned: false }).select().single();
+      if (error) throw error;
+      return res.status(201).json(data);
+    }
+    if (req.method === 'PUT') {
+      const { id, pinned, notes } = req.body;
+      const { data, error } = await supabase.from('viq_saved_analyses').update({ pinned, notes }).eq('id', id).select().single();
+      if (error) throw error;
+      return res.status(200).json(data);
+    }
+    if (req.method === 'DELETE') {
+      const { id } = req.body;
+      const { error } = await supabase.from('viq_saved_analyses').delete().eq('id', id);
+      if (error) throw error;
+      return res.status(200).json({ ok: true });
+    }
+    res.status(405).json({ error: 'Method not allowed' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}

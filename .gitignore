@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+
+# Patch/fix scripts (dev artifacts)
+fix_enc.mjs
+fix_enc2.cjs
+fix_encoding.ps1
+fix_jsx.cjs
+fix_ternary.cjs
+patch_analytics.cjs
+patch2.cjs
+patch3.cjs
+safe_patch.cjs
+del_line.cjs
+original_block.txt
+replacement_block.txt
+test-alasql.mjs
+
+# Scratch
+scratch/
+
+# Backup
+src/pages/AnalyzePage_test.bak

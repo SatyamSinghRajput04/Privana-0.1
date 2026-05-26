@@ -1,13 +1,72 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/executors/ranking.ts
-// S1 SCAFFOLD STUB — Implementation added in Step S8f.
+// S8f RANKING EXECUTOR — Ranks category groups by a metric (Top-N).
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { AnalysisPlan, ExecutorResult } from '../types';
+import { GroupedAverageExecutor } from './groupedAverage';
 
 export const RankingExecutor = {
   /**
-   * Computes top-N records or categories ordered by a metric.
+   * Computes top-N records or groups ordered by plan.metric.
    */
-  execute(_plan: unknown, _rows: unknown[]): never {
-    throw new Error('not implemented: RankingExecutor.execute (Step S8f)');
+  execute(plan: AnalysisPlan, rows: any[]): ExecutorResult {
+    const metric = plan.metric;
+    const groupBy = plan.groupBy;
+
+    if (!metric || !rows || rows.length === 0) {
+      return { status: 'partial_missing', rows: [] };
+    }
+
+    // Default limit
+    let limit = 5;
+
+    // Extract limit from planId or custom instructions if available
+    const planIdStr = plan.planId.toLowerCase();
+    const topMatch = planIdStr.match(/top[_\s]*(\d+)/) || plan.planId.match(/ranking[_\s]*(\d+)/);
+    if (topMatch) {
+      limit = parseInt(topMatch[1], 10);
+    }
+
+    let rankedRows: any[] = [];
+    let status: 'success' | 'partial_small_n' | 'partial_missing' = 'success';
+    let metadata: Record<string, any> = { metric };
+
+    if (groupBy && groupBy.length > 0) {
+      // Grouped ranking (e.g. top platforms by average stress)
+      const groupRes = GroupedAverageExecutor.execute(plan, rows);
+      if (groupRes.status === 'partial_missing') {
+        return groupRes;
+      }
+      rankedRows = groupRes.rows.slice(0, limit);
+      status = groupRes.status;
+      metadata = {
+        ...metadata,
+        ...groupRes.metadata,
+        limit,
+        isGrouped: true
+      };
+    } else {
+      // Individual record ranking (e.g. top 5 records by sleep_hours)
+      const validRows = rows
+        .filter(r => r[metric] !== null && r[metric] !== undefined && r[metric] !== '' && !isNaN(Number(r[metric])))
+        .map(r => ({ ...r, metric_value: Number(r[metric]) }));
+
+      validRows.sort((a, b) => b.metric_value - a.metric_value);
+
+      rankedRows = validRows.slice(0, limit);
+      status = validRows.length < 5 ? 'partial_small_n' : 'success';
+      metadata = {
+        ...metadata,
+        limit,
+        isGrouped: false
+      };
+    }
+
+    return {
+      status,
+      rows: rankedRows,
+      metadata
+    };
   }
 };

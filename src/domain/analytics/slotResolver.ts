@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { DatasetProfile } from '../types/dataset';
-import { SemanticResolver, ResolvedColumn } from './semanticResolver';
+import { SemanticResolver } from './semanticResolver';
 import { AnalysisIntent, Filter, AnalysisPlan } from './types';
 
 export const SlotResolver = {

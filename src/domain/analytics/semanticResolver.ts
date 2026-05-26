@@ -25,7 +25,7 @@ export const SemanticResolver = {
     }
 
     // Clean question: lowercase and strip punctuation except underscores
-    const cleanQ = question.toLowerCase().replace(/[?.,\/#!$%\^&\*;:{}=\-_`~()]/g, ' ');
+    const cleanQ = question.toLowerCase().replace(/[?.,/#!$%^&*;:{}=\-_`~()]/g, ' ');
     const words = cleanQ.split(/\s+/).filter(w => w.length > 0);
 
     const resolved: ResolvedColumn[] = [];

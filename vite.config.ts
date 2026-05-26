@@ -12,6 +12,24 @@ export default defineConfig(async () => {
   } catch {}
   return { 
     plugins,
+    build: {
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (id.includes('node_modules')) {
+              if (id.includes('alasql')) {
+                return 'vendor-alasql';
+              }
+              if (id.includes('recharts') || id.includes('d3')) {
+                return 'vendor-charts';
+              }
+              return 'vendor-core';
+            }
+          }
+        }
+      }
+    },
     server: {
       proxy: {
         '/api': {

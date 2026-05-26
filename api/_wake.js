@@ -1,3 +1,6 @@
+// NOTE: This file runs strictly in the secure Node.js backend/serverless environment.
+// The raw fetch below is used for server-to-server Supabase wake-up/restores
+// and does not violate or bypass the client-side local-first egress firewall.
 const PROJECT_REF = process.env.FULLSTACK_PROJECT_REF || '';
 const RESTORE_URL = process.env.FULLSTACK_RESTORE_API_URL || '';
 

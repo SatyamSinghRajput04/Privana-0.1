@@ -51,7 +51,6 @@ export default function VaultChart({ data, chartType, height = 260 }: Props) {
   const numKeys = keys.filter(k => typeof data[0][k] === 'number');
   const strKey = keys.find(k => typeof data[0][k] === 'string') || keys[0];
   const valKey = numKeys[0] || keys[1] || keys[0];
-  const val2Key = numKeys[1];
   const labelKey = data[0].label ? 'label' : data[0].month ? 'month' : strKey;
 
   // ── PIE ────────────────────────────────────────────────────────────────────

@@ -51,7 +51,7 @@ export default function App() {
       loadWorkspaces();
       checkOllama();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, loadWorkspaces, checkOllama]);
 
   if (!isAuthenticated) {
     return <LandingPage />;
@@ -64,11 +64,7 @@ export default function App() {
       <Sidebar 
         page={page} 
         setPage={setPage} 
-        workspaces={workspaces} 
-        ws={ws} 
-        setWs={setWs} 
         open={sideOpen} 
-        netAlert={netAlert} 
       />
       <div className="main-area">
         {page !== 'analyze' && (

@@ -6,7 +6,7 @@ export default function OllamaDiagnostics() {
 
   useEffect(() => {
     checkOllama();
-  }, []);
+  }, [checkOllama]);
 
   const getStatusColor = () => {
     if (ollamaStatus === 'online') return 'var(--green3)';

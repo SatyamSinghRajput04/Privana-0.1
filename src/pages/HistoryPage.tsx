@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import type { Workspace, Page } from '../App';
 import Chart from '../components/Chart';
@@ -12,21 +13,21 @@ export default function HistoryPage({ ws, activePage }:P) {
   const [showSQL, setSQL]= useState(false);
   const [search,  setSch]= useState('');
 
-  const load = () => {
+  const load = useCallback(() => {
     if(!ws) return;
     setLd(true);
-    fetch(`/api/queries?workspace_id=${ws.id}`).then(r=>r.json()).then(d=>{ setQ(Array.isArray(d)?d:[]); setLd(false); }).catch(()=>setLd(false));
-  };
-  useEffect(load,[ws]);
+    privacyFetch(`/api/queries?workspace_id=${ws.id}`).then(r=>r.json()).then(d=>{ setQ(Array.isArray(d)?d:[]); setLd(false); }).catch(()=>setLd(false));
+  }, [ws]);
+  useEffect(load,[load]);
 
   // Reload when this page becomes active
   useEffect(() => {
     if (activePage === 'history') load();
-  }, [activePage]);
+  }, [activePage, load]);
 
   const del_ = async (id:number, e:React.MouseEvent) => {
     e.stopPropagation();
-    await fetch('/api/queries',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    await privacyFetch('/api/queries',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
     setQ(q=>q.filter(x=>x.id!==id));
     if(sel?.id===id) setSel(null);
   };

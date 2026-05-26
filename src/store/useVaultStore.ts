@@ -1,6 +1,13 @@
+import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import { create } from 'zustand';
 import type { Page, Workspace } from '../App';
 import { localDB } from '../lib/indexedDb';
+
+interface EgressStats {
+  external: number;
+  loopback: number;
+  auditSync: number;
+}
 
 interface VaultState {
   page: Page;
@@ -13,21 +20,25 @@ interface VaultState {
   saved: any[];
   ollamaStatus: 'online' | 'offline' | 'checking';
   ollamaModels: string[];
-  
+
+  // Egress byte counters — updated reactively by NetworkMonitor / privacyFetch
+  egressStats: EgressStats;
+
   // Auth states
   isAuthenticated: boolean;
   authMode: 'solo' | 'server' | null;
   serverUrl: string;
-  
+
   setPage: (page: Page) => void;
   setWorkspaces: (workspaces: Workspace[]) => void;
   setWs: (ws: Workspace | null) => void;
   setNetAlert: (netAlert: boolean) => void;
   setSelectedDataset: (dataset: any | null) => void;
-  
+  setEgressStats: (stats: Partial<EgressStats>) => void;
+
   login: (mode: 'solo' | 'server', serverUrl?: string) => Promise<void>;
   logout: () => void;
-  
+
   loadWorkspaces: () => Promise<void>;
   createWorkspace: (name: string, description: string, mode: string) => Promise<void>;
   loadDatasets: (wsId: number) => Promise<void>;
@@ -52,7 +63,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   saved: [],
   ollamaStatus: 'checking',
   ollamaModels: [],
-  
+
+  egressStats: { external: 0, loopback: 0, auditSync: 0 },
+
   isAuthenticated: false,
   authMode: null,
   serverUrl: '',
@@ -69,11 +82,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
   setNetAlert: (netAlert) => set({ netAlert }),
   setSelectedDataset: (selectedDataset) => set({ selectedDataset }),
+  setEgressStats: (stats) => set(s => ({ egressStats: { ...s.egressStats, ...stats } })),
 
   login: async (mode, serverUrl = '') => {
     set({ isAuthenticated: true, authMode: mode, serverUrl });
     await get().loadWorkspaces();
   },
+
 
   logout: () => {
     set({ isAuthenticated: false, authMode: null, ws: null, workspaces: [], datasets: [], selectedDataset: null, queries: [], saved: [] });
@@ -104,7 +119,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       }
     } else {
       try {
-        const r = await fetch('/api/workspaces');
+        const r = await privacyFetch('/api/workspaces');
         const d = await r.json();
         if (Array.isArray(d)) {
           set({ workspaces: d });
@@ -112,7 +127,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
             get().setWs(d[0]);
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   },
 
@@ -128,7 +143,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       set({ workspaces: [...workspaces, newWs] });
       get().setWs(newWs);
     } else {
-      const r = await fetch('/api/workspaces', {
+      const r = await privacyFetch('/api/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, description, mode })
@@ -154,10 +169,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         } else if (list.length === 0) {
           set({ selectedDataset: null });
         }
-      } catch (e) {}
+      } catch {}
     } else {
       try {
-        const r = await fetch(`/api/datasets?workspace_id=${wsId}`);
+        const r = await privacyFetch(`/api/datasets?workspace_id=${wsId}`);
         const d = await r.json();
         if (Array.isArray(d)) {
           set({ datasets: d });
@@ -167,7 +182,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
             set({ selectedDataset: null });
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   },
 
@@ -199,7 +214,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       set({ datasets: updated, selectedDataset: newDs });
       return newDs;
     } else {
-      const r = await fetch('/api/datasets', {
+      const r = await privacyFetch('/api/datasets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -231,7 +246,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         set({ selectedDataset: updated.length ? updated[0] : null });
       }
     } else {
-      await fetch('/api/datasets', {
+      await privacyFetch('/api/datasets', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
@@ -251,12 +266,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       set({ queries: list });
     } else {
       try {
-        const r = await fetch(`/api/queries?workspace_id=${wsId}`);
+        const r = await privacyFetch(`/api/queries?workspace_id=${wsId}`);
         const d = await r.json();
         if (Array.isArray(d)) {
           set({ queries: d });
         }
-      } catch (e) {}
+      } catch {}
     }
   },
 
@@ -285,7 +300,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         result_data: [] // Zero records leave client network in server mode
       };
       
-      const r = await fetch('/api/queries', {
+      const r = await privacyFetch('/api/queries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cloudPayload)
@@ -303,12 +318,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       set({ saved: list });
     } else {
       try {
-        const r = await fetch(`/api/saved?workspace_id=${wsId}`);
+        const r = await privacyFetch(`/api/saved?workspace_id=${wsId}`);
         const d = await r.json();
         if (Array.isArray(d)) {
           set({ saved: d });
         }
-      } catch (e) {}
+      } catch {}
     }
   },
 
@@ -324,7 +339,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       });
       set({ saved: [...saved, newB] });
     } else {
-      const r = await fetch('/api/saved', {
+      const r = await privacyFetch('/api/saved', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bookmarkData)
@@ -346,7 +361,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       };
       set({ saved: saved.filter(x => x.id !== id) });
     } else {
-      await fetch('/api/saved', {
+      await privacyFetch('/api/saved', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
@@ -360,7 +375,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), 1500);
-      const r = await fetch('http://localhost:11434/api/tags', { signal: controller.signal });
+      const r = await privacyFetch('http://localhost:11434/api/tags', { signal: controller.signal });
       clearTimeout(id);
       
       if (r.ok) {
@@ -370,7 +385,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       } else {
         set({ ollamaStatus: 'offline', ollamaModels: [] });
       }
-    } catch (e) {
+    } catch {
       set({ ollamaStatus: 'offline', ollamaModels: [] });
     }
   }

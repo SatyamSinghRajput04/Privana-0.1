@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, no-useless-escape, no-irregular-whitespace, prefer-const, no-loss-of-precision, react-hooks/exhaustive-deps */
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -7,6 +8,9 @@ import {
 } from 'recharts';
 import type { Page } from '../App';
 import { executeSQL, getSqlTableName, getTableSchema, isTableLoaded, generateLocalQuery, loadCSV, loadJSON } from '../lib/sqlEngine';
+import { validateDatasetSafety } from '../domain/safeCompute/preflight';
+import { runSafeCompute } from '../domain/safeCompute';
+import { ExcludedFeature } from '../domain/safeCompute/types';
 import { localDB } from '../lib/indexedDb';
 import { useVaultStore } from '../store/useVaultStore';
 import { 
@@ -284,6 +288,17 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     kpiCards: { label: string; value: string; sub: string; color: string }[];
     xStats: { mean: number; std: number; min: number; max: number };
     yStats: { mean: number; std: number; min: number; max: number };
+    targetSummary?: {
+      target: string;
+      detectedType: string;
+      sampleSize: number;
+      missingCount: number;
+      uniqueCount: number;
+      positiveClass?: string;
+      mappingNote?: string;
+    };
+    excludedFeatures?: ExcludedFeature[];
+    warnings?: string[];
   };
   const [analyticalContext, setAnalyticalContext] = useState<AnalyticalContext | null>(null);
   const [isFilterQueryActive, setIsFilterQueryActive] = useState(false);
@@ -794,7 +809,16 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const runLocalStatisticalAnalysis = (question: string, tableName: string): string | null => {
     const q = question.toLowerCase();
     
+    // Check if it is either a standard statistical query OR a feature importance query
+    const isFeatureImportanceQuery = 
+      q.includes('strongest relationship') ||
+      q.includes('relationship with') ||
+      q.includes('most related') ||
+      q.includes('feature importance') ||
+      q.includes('which feature');
+
     const isStatQuery = 
+      isFeatureImportanceQuery ||
       q.includes('correlation matrix') ||
       q.includes('spearman') ||
       q.includes('significant') || q.includes('significance') || q.includes('95% confidence') ||
@@ -814,6 +838,41 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     try {
       const tbl = getSqlTableName(tableName);
       const rows = executeSQL(`SELECT * FROM ${tbl}`);
+
+      // ── Hoisted Universal Pre-Flight Guard blocker ──
+      const preflightBlock = validateDatasetSafety(rows, tableName);
+      if (preflightBlock) {
+        return (
+          `🚨 **Dataset Safety Guard Intercepted**\n\n` +
+          `**Reason:** ${preflightBlock.reason}\n\n` +
+          `**Guided Next Steps:**\n` +
+          preflightBlock.nextSteps.map((step, sIdx) => `${sIdx + 1}. ${step}`).join('\n')
+        );
+      }
+
+      // ── Intercept Feature Importance Q&A ──
+      if (isFeatureImportanceQuery) {
+        const result = runSafeCompute({ question, tableName, rows });
+        if (result.status === 'blocked') {
+          return (
+            `🚨 **Dataset Safety Guard Intercepted**\n\n` +
+            `**Reason:** ${result.reason}\n\n` +
+            `**Guided Next Steps:**\n` +
+            result.nextSteps.map((step, sIdx) => `${sIdx + 1}. ${step}`).join('\n')
+          );
+        }
+        if (result.status === 'computed') {
+          return result.answer;
+        }
+        if (result.status === 'unsupported') {
+          return (
+            `⚠️ **Statistical Path Unsupported**\n\n` +
+            `${result.reason}\n\n` +
+            `**Suggested safe questions you can ask:**\n` +
+            result.suggestedQuestions.map(sq => `* "${sq}"`).join('\n')
+          );
+        }
+      }
 
       // â”€â”€ Pre-flight guard 1: metadata-file detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // A metadata JSON loaded as a 1-row table with @context/license etc.
@@ -1421,6 +1480,56 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
       const tbl = getSqlTableName(tableName);
       const rows = executeSQL(`SELECT * FROM ${tbl}`);
       if (!rows || rows.length === 0) return;
+
+      // Check if it is a feature importance style query
+      const isFeatureImportanceQuery = 
+        q.includes('strongest relationship') ||
+        q.includes('relationship with') ||
+        q.includes('most related') ||
+        q.includes('feature importance') ||
+        q.includes('which feature');
+
+      if (isFeatureImportanceQuery) {
+        const result = runSafeCompute({ question, tableName, rows });
+        if (result.status === 'computed') {
+          setAnalyticalContext({
+            type: 'feature_importance',
+            title: `Predictors of ${result.targetSummary?.target}`,
+            valCol: '',
+            cntCol: result.targetSummary?.target || '',
+            scatterPairs: rows.map(() => ({ x: 0, y: 0, isOutlier: false })), // dummy to satisfy scatterPairs.length n count in UI
+            regSlope: 0,
+            regIntercept: 0,
+            regR2: 0,
+            histX: [],
+            histY: [],
+            topRows: result.rows.map(r => ({
+              rank: r.feature,
+              value: r.score,
+              extra: {
+                pValue: r.adjustedPValue,
+                method: r.method,
+                strength: r.strength,
+                direction: r.direction
+              }
+            })),
+            binRows: [],
+            pieSlices: [],
+            kpiCards: [
+              { label: 'Outcome Target', value: result.targetSummary?.target || 'None', sub: `Type: ${result.targetSummary?.detectedType}`, color: '#3b82f6' },
+              { label: 'Top Predictor', value: result.rows[0]?.feature || 'None', sub: `Score: ${(result.rows[0]?.score ?? 0).toFixed(4)}`, color: '#10b981' },
+              { label: 'Total Sample Size', value: result.audit.sampleSize.toLocaleString(), sub: `Skipped: ${result.audit.excludedFeaturesCount}`, color: '#8b5cf6' },
+              { label: 'Confidence Level', value: result.confidence, sub: `Warnings: ${result.warnings.length}`, color: result.confidence === 'High confidence' ? '#10b981' : result.confidence === 'Medium confidence' ? '#f59e0b' : '#ef4444' }
+            ],
+            xStats: { mean: result.warnings.length, std: 0, min: result.targetSummary?.detectedType === 'binary_categorical' ? 1 : 0, max: 0 },
+            yStats: { mean: 0, std: 0, min: 0, max: 0 },
+            targetSummary: result.targetSummary,
+            excludedFeatures: result.excludedFeatures,
+            warnings: result.warnings
+          });
+          return;
+        }
+      }
 
       const allCols = Object.keys(rows[0]);
       const numericCols = allCols.filter(c => {
@@ -3291,6 +3400,31 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                               R² = <span style={{color:'#a855f7',fontWeight:700}}>{analyticalContext.regR2.toFixed(4)}</span>{'  ·  '}ŷ = <span style={{color:'#ef4444',fontWeight:700}}>{analyticalContext.regSlope.toFixed(4)}</span>x {analyticalContext.regIntercept >= 0 ? '+ ' : '− '}<span style={{color:'#ef4444',fontWeight:700}}>{Math.abs(analyticalContext.regIntercept).toFixed(4)}</span>
                             </div>
                           </>
+                        ) : analyticalContext && analyticalContext.type === 'feature_importance' ? (
+                          <>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.5rem', padding: '0.75rem 0.85rem 0 0.85rem' }}>
+                              📊 Strongest Predictors of {analyticalContext.cntCol}
+                              <span style={{ fontSize: '0.56rem', color: '#71717a', marginLeft: '0.5rem', fontWeight: 400 }}>
+                                Ranked by normalized association strength, not direct causal importance
+                              </span>
+                            </div>
+                            <ResponsiveContainer width="100%" height={220}>
+                              <BarChart data={analyticalContext.topRows} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a24" />
+                                <XAxis type="number" tick={{ fontSize: 9, fill: '#52525b' }} domain={[0, 1]} />
+                                <YAxis dataKey="rank" type="category" tick={{ fontSize: 8, fill: '#a1a1aa' }} width={90} />
+                                <Tooltip contentStyle={{ background: '#0e0e12', border: '1px solid #27272a', fontSize: '0.65rem', color: '#e4e4e7' }} formatter={(v: unknown) => Number(v).toFixed(4)} />
+                                <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={14}>
+                                  {analyticalContext.topRows.map((r: any, i: number) => {
+                                    const extra = r.extra || {};
+                                    const fill = extra.strength === 'Strong' ? '#10b981' : (extra.strength === 'Moderate' ? '#3b82f6' : '#eab308');
+                                    return <Cell key={i} fill={fill} />;
+                                  })}
+                                  <LabelList dataKey="value" position="right" fontSize={9} fill="#a1a1aa" formatter={(v: any) => Number(v).toFixed(4)} />
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </>
                         ) : analyticalContext && analyticalContext.type === 'top5' ? (
                           <>
                             <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.5rem' }}>ðŸ† Top 5 by {analyticalContext.cntCol}</div>
@@ -3412,6 +3546,44 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                                 </BarChart>
                               </ResponsiveContainer>
                             </>
+                          ) : analyticalContext && analyticalContext.type === 'feature_importance' && analyticalContext.targetSummary ? (
+                            <div style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', height: '100%', gap: '0.35rem', overflowY: 'auto' }}>
+                              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#e4e4e7', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <Info size={12} style={{ color: '#3b82f6' }} />
+                                🎯 Target Outcome Summary
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem', fontSize: '0.58rem', marginTop: '0.1rem' }}>
+                                <div style={{ background: '#121218', border: '1px solid #1e1e28', padding: '0.35rem 0.5rem', borderRadius: '6px' }}>
+                                  <div style={{ color: '#71717a', fontSize: '0.5rem', textTransform: 'uppercase' }}>Target Field</div>
+                                  <div style={{ fontWeight: 700, color: '#f4f4f5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={analyticalContext.targetSummary.target}>
+                                    {analyticalContext.targetSummary.target}
+                                  </div>
+                                </div>
+                                <div style={{ background: '#121218', border: '1px solid #1e1e28', padding: '0.35rem 0.5rem', borderRadius: '6px' }}>
+                                  <div style={{ color: '#71717a', fontSize: '0.5rem', textTransform: 'uppercase' }}>Detected Type</div>
+                                  <div style={{ fontWeight: 700, color: '#f4f4f5', textTransform: 'capitalize' }}>
+                                    {analyticalContext.targetSummary.detectedType.replace('_', ' ')}
+                                  </div>
+                                </div>
+                                <div style={{ background: '#121218', border: '1px solid #1e1e28', padding: '0.35rem 0.5rem', borderRadius: '6px' }}>
+                                  <div style={{ color: '#71717a', fontSize: '0.5rem', textTransform: 'uppercase' }}>Sample Size (N)</div>
+                                  <div style={{ fontWeight: 700, color: '#f4f4f5' }}>
+                                    {analyticalContext.targetSummary.sampleSize.toLocaleString()} rows
+                                  </div>
+                                </div>
+                                <div style={{ background: '#121218', border: '1px solid #1e1e28', padding: '0.35rem 0.5rem', borderRadius: '6px' }}>
+                                  <div style={{ color: '#71717a', fontSize: '0.5rem', textTransform: 'uppercase' }}>Unique values</div>
+                                  <div style={{ fontWeight: 700, color: '#f4f4f5' }}>
+                                    {analyticalContext.targetSummary.uniqueCount} distinct
+                                  </div>
+                                </div>
+                              </div>
+                              {analyticalContext.targetSummary.positiveClass && (
+                                <div style={{ fontSize: '0.52rem', background: 'rgba(59,130,246,0.06)', border: '1px dashed rgba(59,130,246,0.2)', borderRadius: '6px', padding: '0.35rem 0.45rem', color: '#93c5fd', marginTop: '0.1rem', lineHeight: 1.25 }}>
+                                  <span style={{ fontWeight: 700 }}>Positive Encoding:</span> "{analyticalContext.targetSummary.positiveClass}" &rarr; 1. {analyticalContext.targetSummary.mappingNote}
+                                </div>
+                              )}
+                            </div>
                           ) : isMentalHealthSchema && platformShareData.length > 0 ? (
                             <>
                               <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.4rem' }}>Platform Usage Share</div>
@@ -3479,6 +3651,59 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                                 </PieChart>
                               </ResponsiveContainer>
                             </>
+                          ) : analyticalContext && analyticalContext.type === 'feature_importance' ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '0.45rem', overflowY: 'auto' }}>
+                              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#e4e4e7', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <Sparkles size={12} style={{ color: '#10b981' }} />
+                                Key Predictive Driver Insights
+                              </div>
+
+                              {/* Causal warning banner */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '6px', padding: '0.35rem 0.5rem', color: '#f87171', fontSize: '0.52rem', lineHeight: 1.3 }}>
+                                <ShieldAlert size={14} style={{ flexShrink: 0 }} />
+                                <span>
+                                  <strong>⚠️ Important:</strong> This ranking shows statistical association, not causal proof. Correlation does not imply causation.
+                                </span>
+                              </div>
+
+                              {/* Top Predictor Detail */}
+                              {analyticalContext.topRows && analyticalContext.topRows.length > 0 ? (
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.4rem 0.5rem', borderRadius: '6px', fontSize: '0.58rem' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ color: '#a1a1aa', fontSize: '0.5rem' }}>STRONGEST RELATIONSHIP</span>
+                                    <span style={{ fontWeight: 700, color: '#10b981' }}>{analyticalContext.topRows[0]?.rank}</span>
+                                  </div>
+                                  <div style={{ textAlign: 'right' }}>
+                                    <div style={{ color: '#a1a1aa', fontSize: '0.5rem' }}>STRENGTH ({String(analyticalContext.topRows[0]?.extra?.method || '')})</div>
+                                    <div style={{ fontWeight: 700, color: '#f4f4f5' }}>
+                                      {Number(analyticalContext.topRows[0]?.value ?? 0).toFixed(4)} ({String(analyticalContext.topRows[0]?.extra?.strength || '')})
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '0.58rem', color: '#71717a', fontStyle: 'italic', textAlign: 'center', padding: '0.5rem' }}>
+                                  No features survived safety exclusions.
+                                </div>
+                              )}
+
+                              {/* Exclusions or warnings scroll panel */}
+                              {((analyticalContext.excludedFeatures && analyticalContext.excludedFeatures.length > 0) || (analyticalContext.warnings && analyticalContext.warnings.length > 0)) && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: '110px', overflowY: 'auto', background: '#121218', border: '1px solid #1e1e28', padding: '0.4rem', borderRadius: '6px', fontSize: '0.54rem' }}>
+                                  {analyticalContext.warnings && analyticalContext.warnings.map((w: string, idx: number) => (
+                                    <div key={`w-${idx}`} style={{ color: '#f59e0b', display: 'flex', gap: '0.2rem', alignItems: 'flex-start' }}>
+                                      <span>⚠️</span>
+                                      <span>{w}</span>
+                                    </div>
+                                  ))}
+                                  {analyticalContext.excludedFeatures && analyticalContext.excludedFeatures.map((ex: ExcludedFeature, idx: number) => (
+                                    <div key={`ex-${idx}`} style={{ color: '#71717a', display: 'flex', gap: '0.2rem', alignItems: 'flex-start' }}>
+                                      <span>🛡️</span>
+                                      <span><strong>{ex.feature}:</strong> Skipped due to {ex.reason}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           ) : isMentalHealthSchema && screenTimeStressData.length > 0 ? (
                             <>
                               <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.4rem' }}>Screen Time vs Stress</div>

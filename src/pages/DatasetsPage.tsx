@@ -1,7 +1,9 @@
+import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import type { Page } from '../App';
 import { loadCSV, loadJSON } from '../lib/sqlEngine';
+import { DatasetValidator } from '../domain/validator/validator';
 import { useVaultStore } from '../store/useVaultStore';
 import { localDB } from '../lib/indexedDb';
 
@@ -99,7 +101,7 @@ export default function DatasetsPage({ setPage }: P) {
       setLd(true);
       loadDatasets(ws.id).finally(() => setLd(false));
     }
-  }, [ws]);
+  }, [ws, loadDatasets]);
 
   const uploadSample = async (name: string, type: string, rows: number, cols: number, size: number) => {
     if (!ws) return;
@@ -245,7 +247,7 @@ export default function DatasetsPage({ setPage }: P) {
 
         for (let i = 0; i < 1200; i++) {
           const st = screenTimeSlots[i];
-          let baseStress = 3.0 + (st / 3.0) * 3.6; // average stress varies from 3.0 to 6.6
+          const baseStress = 3.0 + (st / 3.0) * 3.6; // average stress varies from 3.0 to 6.6
           let stressVal = Math.round(baseStress + (Math.random() * 4 - 2));
           stressVal = Math.max(1, Math.min(10, stressVal));
           stressLevels.push(stressVal);
@@ -339,7 +341,20 @@ export default function DatasetsPage({ setPage }: P) {
           parsedRows = await loadCSV(f.name, text);
         }
         
-        const colCount = parsedRows.length > 0 ? Object.keys(parsedRows[0]).length : 0;
+        // Profile and validate dataset shape/integrity immediately via D1 §1.3 (I4) & §1.5
+        const profile = DatasetValidator.profile(parsedRows, f.name);
+        if (profile.shape === 'metadata') {
+          throw new Error(
+            `"${f.name}" appears to be a dataset metadata / descriptor file. ` +
+            `This file describes the dataset but contains NO actual data rows.\n\n` +
+            `Please upload the real records dataset instead.`
+          );
+        }
+        if (profile.shape === 'corrupted' || profile.shape === 'empty') {
+          throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
+        }
+
+        const colCount = profile.columnCount;
 
         // Cache raw CSV/JSON in local IndexedDB instead of localStorage
         await localDB.saveDatasetCSV(f.name, text);
@@ -398,7 +413,7 @@ export default function DatasetsPage({ setPage }: P) {
       localStorage.setItem(`privana_ds_meta_${ws.id}`, JSON.stringify(dsList));
       await loadDatasets(ws.id);
     } else {
-      const r = await fetch('/api/datasets', {
+      const r = await privacyFetch('/api/datasets', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: selectedDataset.id, columns_meta: updatedMeta })

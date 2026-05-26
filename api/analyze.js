@@ -1,4 +1,5 @@
 import supabase from './_supabase.js';
+import { enforceCORS, enforceSessionWorkspaceHeaders, enforceBodySize, securePromptPersistence, enforceRateLimit } from './_security.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTENT CLASSIFIER
@@ -477,14 +478,16 @@ function generateInsights(intent, results, question) {
 // HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  enforceCORS(req, res);
   if (req.method === 'OPTIONS') return res.status(204).end();
+  if (!enforceRateLimit(req, res)) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (!enforceBodySize(req, res)) return;
+  if (!enforceSessionWorkspaceHeaders(req, res)) return;
 
   try {
-    const { question, dataset_id, workspace_id } = req.body;
+    const headerWorkspaceId = parseInt(req.headers['x-workspace-id'], 10);
+    const { question, dataset_id } = req.body;
     if (!question) return res.status(400).json({ error: 'question required' });
 
     const start = Date.now();
@@ -493,7 +496,11 @@ export default async function handler(req, res) {
     let columns = [];
     let datasetName = 'dataset';
     if (dataset_id) {
-      const { data: ds } = await supabase.from('viq_datasets').select('*').eq('id', dataset_id).single();
+      const { data: ds } = await supabase.from('viq_datasets')
+        .select('*')
+        .eq('id', dataset_id)
+        .eq('workspace_id', headerWorkspaceId)
+        .single();
       if (ds) {
         datasetName = ds.name;
         columns = ds.columns_meta || [
@@ -532,11 +539,12 @@ export default async function handler(req, res) {
     // 6. Flatten result_data for DB storage (store points array)
     const resultData = results.points || [];
 
-    // 7. Persist
+    // 7. Persist (HMAC-SHA256 hashed secure question to enforce local-first zero plain-text prompt egress)
+    const secureQuestion = securePromptPersistence(question);
     const { data: saved, error } = await supabase.from('viq_queries').insert({
-      workspace_id: workspace_id || 1,
+      workspace_id: headerWorkspaceId,
       dataset_id: dataset_id || null,
-      question,
+      question: secureQuestion,
       generated_sql: sqlMeta.sql,
       result_data: resultData,
       chart_type: sqlMeta.chartType,
@@ -550,7 +558,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       id: saved.id,
-      question,
+      question: secureQuestion,
       intent,                        // expose detected intent to frontend
       sql: sqlMeta.sql,
       data: resultData,

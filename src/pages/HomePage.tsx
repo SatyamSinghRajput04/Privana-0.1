@@ -1,3 +1,4 @@
+import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import type { Workspace, Page } from '../App';
@@ -16,9 +17,9 @@ export default function HomePage({ ws, workspaces, setWS, setWs, setPage }:P) {
   useEffect(()=>{
     if(!ws) return;
     Promise.all([
-      fetch(`/api/datasets?workspace_id=${ws.id}`).then(r=>r.json()),
-      fetch(`/api/queries?workspace_id=${ws.id}&limit=5`).then(r=>r.json()),
-      fetch(`/api/saved?workspace_id=${ws.id}`).then(r=>r.json()),
+      privacyFetch(`/api/datasets?workspace_id=${ws.id}`).then(r=>r.json()),
+      privacyFetch(`/api/queries?workspace_id=${ws.id}&limit=5`).then(r=>r.json()),
+      privacyFetch(`/api/saved?workspace_id=${ws.id}`).then(r=>r.json()),
     ]).then(([ds,qs,sv])=>{
       setStats({datasets:Array.isArray(ds)?ds.length:0, queries:Array.isArray(qs)?qs.length:0, saved:Array.isArray(sv)?sv.length:0});
       setRecent(Array.isArray(qs)?qs.slice(0,5):[]);
@@ -29,7 +30,7 @@ export default function HomePage({ ws, workspaces, setWS, setWs, setPage }:P) {
     if(!nm.trim()) return;
     setCreating(true);
     try {
-      const r = await fetch('/api/workspaces',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nm,description:nd,mode:nmode})});
+      const r = await privacyFetch('/api/workspaces',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nm,description:nd,mode:nmode})});
       const w = await r.json();
       setWS([...workspaces,w]); setWs(w); setShowNew(false); setNm(''); setNd('');
     } finally { setCreating(false); }

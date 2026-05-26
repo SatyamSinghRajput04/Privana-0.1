@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useVaultStore } from '../store/useVaultStore';
-import { Shield, Download, Server, Cpu, Database, EyeOff, Key, Terminal, ArrowRight } from 'lucide-react';
+import { Shield, Download, Server, Cpu, Database, EyeOff, Key, ArrowRight } from 'lucide-react';
 
 export default function LandingPage() {
   const { login } = useVaultStore();

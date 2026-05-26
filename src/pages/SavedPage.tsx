@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import type { Workspace, Page } from '../App';
 
@@ -8,24 +9,24 @@ export default function SavedPage({ ws, activePage }:P) {
   const [saved, setSaved] = useState<any[]>([]);
   const [loading, setLd]  = useState(true);
 
-  const load = () => {
+  const load = useCallback(() => {
     if(!ws) return;
     setLd(true);
-    fetch(`/api/saved?workspace_id=${ws.id}`).then(r=>r.json()).then(d=>{ setSaved(Array.isArray(d)?d:[]); setLd(false); }).catch(()=>setLd(false));
-  };
-  useEffect(load,[ws]);
+    privacyFetch(`/api/saved?workspace_id=${ws.id}`).then(r=>r.json()).then(d=>{ setSaved(Array.isArray(d)?d:[]); setLd(false); }).catch(()=>setLd(false));
+  }, [ws]);
+  useEffect(load,[load]);
 
   // Reload when this page becomes active
   useEffect(() => {
     if (activePage === 'saved') load();
-  }, [activePage]);
+  }, [activePage, load]);
 
   const pin = async (item:any) => {
-    await fetch('/api/saved',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,pinned:!item.pinned})});
+    await privacyFetch('/api/saved',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,pinned:!item.pinned})});
     load();
   };
   const del_ = async (id:number) => {
-    await fetch('/api/saved',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    await privacyFetch('/api/saved',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
     setSaved(s=>s.filter(x=>x.id!==id));
   };
 

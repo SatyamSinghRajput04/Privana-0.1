@@ -1,15 +1,16 @@
+import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import type { Workspace } from '../App';
 
 export const api = {
   // Workspaces API
   async getWorkspaces(): Promise<Workspace[]> {
-    const r = await fetch('/api/workspaces');
+    const r = await privacyFetch('/api/workspaces');
     if (!r.ok) throw new Error('Failed to fetch workspaces');
     return r.json();
   },
 
   async createWorkspace(name: string, description: string, mode: string): Promise<Workspace> {
-    const r = await fetch('/api/workspaces', {
+    const r = await privacyFetch('/api/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, description, mode }),
@@ -19,7 +20,7 @@ export const api = {
   },
 
   async deleteWorkspace(id: number): Promise<void> {
-    const r = await fetch('/api/workspaces', {
+    const r = await privacyFetch('/api/workspaces', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -29,7 +30,7 @@ export const api = {
 
   // Datasets API
   async getDatasets(workspaceId: number): Promise<any[]> {
-    const r = await fetch(`/api/datasets?workspace_id=${workspaceId}`);
+    const r = await privacyFetch(`/api/datasets?workspace_id=${workspaceId}`);
     if (!r.ok) throw new Error('Failed to fetch datasets');
     return r.json();
   },
@@ -43,7 +44,7 @@ export const api = {
     sizeBytes: number,
     columnsMeta?: any[]
   ): Promise<any> {
-    const r = await fetch('/api/datasets', {
+    const r = await privacyFetch('/api/datasets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -66,7 +67,7 @@ export const api = {
   },
 
   async deleteDataset(id: number): Promise<void> {
-    const r = await fetch('/api/datasets', {
+    const r = await privacyFetch('/api/datasets', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -78,13 +79,13 @@ export const api = {
   async getQueries(workspaceId: number, limit?: number): Promise<any[]> {
     let url = `/api/queries?workspace_id=${workspaceId}`;
     if (limit) url += `&limit=${limit}`;
-    const r = await fetch(url);
+    const r = await privacyFetch(url);
     if (!r.ok) throw new Error('Failed to fetch queries');
     return r.json();
   },
 
   async runAnalysis(question: string, datasetId: number | null, workspaceId: number): Promise<any> {
-    const r = await fetch('/api/analyze', {
+    const r = await privacyFetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, dataset_id: datasetId, workspace_id: workspaceId }),
@@ -95,7 +96,7 @@ export const api = {
   },
 
   async deleteQuery(id: number): Promise<void> {
-    const r = await fetch('/api/queries', {
+    const r = await privacyFetch('/api/queries', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -105,13 +106,13 @@ export const api = {
 
   // Saved Analyses API
   async getSaved(workspaceId: number): Promise<any[]> {
-    const r = await fetch(`/api/saved?workspace_id=${workspaceId}`);
+    const r = await privacyFetch(`/api/saved?workspace_id=${workspaceId}`);
     if (!r.ok) throw new Error('Failed to fetch saved analyses');
     return r.json();
   },
 
   async saveAnalysis(workspaceId: number, title: string, queryId: number, notes?: string): Promise<any> {
-    const r = await fetch('/api/saved', {
+    const r = await privacyFetch('/api/saved', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspace_id: workspaceId, title, query_id: queryId, notes }),
@@ -121,7 +122,7 @@ export const api = {
   },
 
   async togglePinSaved(id: number, pinned: boolean): Promise<any> {
-    const r = await fetch('/api/saved', {
+    const r = await privacyFetch('/api/saved', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id, pinned }),
@@ -131,7 +132,7 @@ export const api = {
   },
 
   async deleteSaved(id: number): Promise<void> {
-    const r = await fetch('/api/saved', {
+    const r = await privacyFetch('/api/saved', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),

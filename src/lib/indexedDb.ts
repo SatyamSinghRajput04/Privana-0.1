@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'privana_local_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export interface CachedDataset {
   name: string;
@@ -46,14 +46,34 @@ export interface LocalSaved {
   created_at: string;
 }
 
+export interface AuditLog {
+  id?: number;
+  workspace_id: number;
+  created_at: string;
+  event_type: 'INFO' | 'ALLOW' | 'WARN' | 'ALERT' | 'BLOCK';
+  process_name: string;
+  message_label: string; // safe redacted message label only
+  pii_types: string[];
+  payload_hash: string;
+  bytes_external: number;
+  bytes_loopback: number;
+  bytes_audit_sync: number;
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    // Graceful check for Node environments that don't have indexedDB globally
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB is not supported in this environment.'));
+      return;
+    }
+
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
 
-    request.onupgradeneeded = (event) => {
+    request.onupgradeneeded = () => {
       const db = request.result;
       
       // Store raw CSV dataset files
@@ -76,6 +96,14 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('saved')) {
         const savedStore = db.createObjectStore('saved', { keyPath: 'id', autoIncrement: true });
         savedStore.createIndex('workspace_id', 'workspace_id', { unique: false });
+      }
+
+      // Offline Egress Audit Logs (Added in DB Version 2)
+      if (!db.objectStoreNames.contains('audit_logs')) {
+        const auditStore = db.createObjectStore('audit_logs', { keyPath: 'id', autoIncrement: true });
+        auditStore.createIndex('workspace_id', 'workspace_id', { unique: false });
+        auditStore.createIndex('created_at', 'created_at', { unique: false });
+        auditStore.createIndex('event_type', 'event_type', { unique: false });
       }
     };
   });
@@ -213,6 +241,73 @@ export const localDB = {
       const index = store.index('workspace_id');
       const request = index.getAll(workspaceId);
       request.onsuccess = () => resolve(request.result as LocalSaved[] || []);
+      request.onerror = () => reject(request.error);
+    });
+  },
+
+  // --- Offline Egress Audit Logs (Added in DB Version 2) ---
+  async saveAuditLog(log: Omit<AuditLog, 'id' | 'created_at'>): Promise<AuditLog> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('audit_logs', 'readwrite');
+      const store = transaction.objectStore('audit_logs');
+      const newLog: AuditLog = {
+        ...log,
+        created_at: new Date().toISOString()
+      };
+      
+      const addRequest = store.add(newLog);
+      
+      addRequest.onsuccess = () => {
+        newLog.id = addRequest.result as number;
+      };
+
+      // Prune logs if they exceed 1,000 for this workspace
+      const index = store.index('workspace_id');
+      const countRequest = index.count(IDBKeyRange.only(log.workspace_id));
+      countRequest.onsuccess = () => {
+        const count = countRequest.result;
+        if (count > 1000) {
+          const excess = count - 1000;
+          let deleted = 0;
+          const cursorRequest = index.openCursor(IDBKeyRange.only(log.workspace_id), 'next'); // oldest first
+          cursorRequest.onsuccess = (e) => {
+            const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+            if (cursor && deleted < excess) {
+              cursor.delete();
+              deleted++;
+              cursor.continue();
+            }
+          };
+        }
+      };
+
+      transaction.oncomplete = () => {
+        // Dispatch custom event only AFTER transaction is fully committed to prevent premature UI re-fetches
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('privana:audit-log-added', { 
+            detail: { workspaceId: log.workspace_id } 
+          }));
+        }
+        resolve(newLog);
+      };
+
+      transaction.onerror = () => reject(transaction.error);
+    });
+  },
+
+  async getAuditLogs(workspaceId: number): Promise<AuditLog[]> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('audit_logs', 'readonly');
+      const store = transaction.objectStore('audit_logs');
+      const index = store.index('workspace_id');
+      const request = index.getAll(workspaceId);
+      request.onsuccess = () => {
+        const results = request.result as AuditLog[] || [];
+        // Sort descending by date
+        resolve(results.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
+      };
       request.onerror = () => reject(request.error);
     });
   }

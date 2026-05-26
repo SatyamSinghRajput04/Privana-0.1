@@ -33,6 +33,56 @@ for (const file of files) {
   }
 }
 
+function isValidLuhn(digits) {
+  const clean = digits.replace(/\D/g, '');
+  if (clean.length < 13 || clean.length > 19) return false;
+  let sum = 0;
+  let shouldDouble = false;
+  for (let i = clean.length - 1; i >= 0; i--) {
+    let val = parseInt(clean.charAt(i), 10);
+    if (shouldDouble) {
+      val *= 2;
+      if (val > 9) val -= 9;
+    }
+    sum += val;
+    shouldDouble = !shouldDouble;
+  }
+  return sum % 10 === 0;
+}
+
+function sanitizeDevLog(body) {
+  if (!body) return '';
+  let sanitized = body;
+  
+  // 1. Emails
+  sanitized = sanitized.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[EMAIL_REDACTED]');
+  
+  // 2. Phone Numbers (Standard formats)
+  sanitized = sanitized.replace(/(?:\+?\d{1,3}[-.\s]?)?\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|(?:\+?\d{1,3}[-.\s]?)?\b\d{3}[-.\s]?\d{4}\b/g, '[PHONE_REDACTED]');
+  
+  // 3. National IDs (SSN, Aadhaar, PAN)
+  sanitized = sanitized.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[SSN_REDACTED]');
+  sanitized = sanitized.replace(/(?<!\d[ -]*)\b\d{4}\s\d{4}\s\d{4}\b(?![ -]*\d)|(?<!\d[ -]*)\b\d{12}\b(?![ -]*\d)/g, '[AADHAAR_REDACTED]');
+  sanitized = sanitized.replace(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/ig, '[PAN_REDACTED]');
+  
+  // 4. Credit Cards with Luhn validation
+  const ccCandidateRegex = /\b(?:\d[ -]*?){13,19}\b/g;
+  const ccCandidates = sanitized.match(ccCandidateRegex) || [];
+  ccCandidates.forEach(candidate => {
+    if (isValidLuhn(candidate)) {
+      sanitized = sanitized.replace(new RegExp(candidate.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '[CREDIT_CARD_REDACTED]');
+    }
+  });
+
+  // 5. Secrets
+  sanitized = sanitized.replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b/g, '[SECRET_REDACTED]');
+  sanitized = sanitized.replace(/\bsk-[A-Za-z0-9]{32,}\b/g, '[SECRET_REDACTED]');
+  sanitized = sanitized.replace(/\bghp_[A-Za-z0-9]{36,255}\b/g, '[SECRET_REDACTED]');
+  sanitized = sanitized.replace(/-----BEGIN[ A-Z0-9]*?PRIVATE KEY-----[\s\S]*?-----END[ A-Z0-9]*?PRIVATE KEY-----/g, '[PRIVATE_KEY_REDACTED]');
+  
+  return sanitized;
+}
+
 // 3. Create a raw HTTP server that builds Vercel-compatible req/res objects
 const server = http.createServer(async (rawReq, rawRes) => {
   // Parse the URL
@@ -115,7 +165,8 @@ const server = http.createServer(async (rawReq, rawRes) => {
   };
 
   try {
-    console.log(`→ ${rawReq.method} /api/${handlerName}${bodyStr ? ' (body: ' + bodyStr.substring(0, 120) + ')' : ''}`);
+    const safeBody = sanitizeDevLog(bodyStr);
+    console.log(`→ ${rawReq.method} /api/${handlerName}${bodyStr ? ' (body: ' + safeBody.substring(0, 120) + ')' : ''}`);
     await handler(req, res);
     console.log(`← ${rawReq.method} /api/${handlerName} → ${statusCode}`);
   } catch (err) {

@@ -454,7 +454,7 @@ export function generateLocalQuery(question: string, tableName: string): QueryRe
 // ─────────────────────────────────────────────────────────────────────────────
 // INSIGHT GENERATOR — works on real data
 // ─────────────────────────────────────────────────────────────────────────────
-export function generateInsights(data: any[], intent: string): string[] {
+export function generateInsights(data: any[]): string[] {
   if (!data || data.length === 0) return ['No data returned for this query.'];
 
   const insights: string[] = [];
@@ -499,7 +499,7 @@ export function generateInsights(data: any[], intent: string): string[] {
 // ─────────────────────────────────────────────────────────────────────────────
 // SQL EXECUTOR
 // ─────────────────────────────────────────────────────────────────────────────
-export function executeSQL(sql: string): any[] {
+export function executeSQL(sql: string, params?: any[]): any[] {
   try {
     // Strip SQL comments
     let cleaned = sql.replace(/--[^\n]*/g, '').trim();
@@ -520,12 +520,12 @@ export function executeSQL(sql: string): any[] {
     if (/^\s*WITH\s/i.test(cleaned)) {
       const lastSelect = cleaned.lastIndexOf('SELECT');
       if (lastSelect > 0) {
-        try { return alasql(cleaned); } catch { /* fall through */ }
+        try { return alasql(cleaned, params); } catch { /* fall through */ }
         cleaned = cleaned.substring(lastSelect);
       }
     }
 
-    return alasql(cleaned);
+    return alasql(cleaned, params);
   } catch (err: any) {
     console.error('AlaSQL query failed:', err.message);
     throw new Error(`Local SQL execution failed: ${err.message}`);

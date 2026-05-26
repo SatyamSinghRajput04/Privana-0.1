@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Page, Workspace } from '../App';
+import type { Page } from '../App';
 import { useVaultStore } from '../store/useVaultStore';
 import { 
   Home, Sliders, BarChart2, LayoutGrid, Database, Clock, Settings, LogOut, Leaf, ChevronLeft, ChevronRight 
@@ -8,15 +8,11 @@ import {
 interface P { 
   page: Page; 
   setPage: (p: Page) => void; 
-  workspaces: Workspace[]; 
-  ws: Workspace | null; 
-  setWs: (w: Workspace) => void; 
   open: boolean; 
-  netAlert: boolean; 
 }
 
-export default function Sidebar({ page, setPage, workspaces, ws, setWs, open, netAlert }: P) {
-  const { logout } = useVaultStore();
+export default function Sidebar({ page, setPage, open }: P) {
+  const { logout, egressStats } = useVaultStore();
   const [collapsed, setCollapsed] = useState(false);
 
   // Map app pages to sidebar items matching Image 3 labels
@@ -112,10 +108,20 @@ export default function Sidebar({ page, setPage, workspaces, ws, setWs, open, ne
             {/* Offline Telemetry Card */}
             <div className="sidebar-telemetry-card">
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span className="sidebar-dot-red" />
-                <span style={{ fontSize: '0.65rem', fontWeight: 600, color: '#f4f4f5' }}>0 bytes sent</span>
+                <span className="sidebar-dot-red" style={{ backgroundColor: egressStats.external > 0 ? '#ef4444' : '#22c55e' }} />
+                <span style={{ fontSize: '0.65rem', fontWeight: 600, color: '#f4f4f5' }}>
+                  {(() => {
+                    const b = egressStats.external;
+                    if (b === 0) return 'External data egress: 0 bytes';
+                    if (b < 1024) return `External data egress: ${b} B`;
+                    if (b < 1024 * 1024) return `External data egress: ${(b / 1024).toFixed(1)} KB`;
+                    return `External data egress: ${(b / (1024 * 1024)).toFixed(1)} MB`;
+                  })()}
+                </span>
               </div>
-              <div style={{ fontSize: '0.55rem', color: '#71717a', marginTop: '1px' }}>Fully offline</div>
+              <div style={{ fontSize: '0.55rem', color: '#71717a', marginTop: '1px' }}>
+                {egressStats.external === 0 ? 'Data secure & local-first' : 'Secure egress sync active'}
+              </div>
             </div>
 
             {/* Exit Workspace */}

@@ -1,49 +1,27 @@
 const fs = require('fs');
+const path = require('path');
 
-const testFile = 'src/pages/AnalyzePage_test.tsx';
-const targetFile = 'src/pages/AnalyzePage.tsx';
+const filePath = path.join(__dirname, '..', 'src', 'pages', 'AnalyzePage.tsx');
+let content = fs.readFileSync(filePath, 'utf8');
 
-if (!fs.existsSync(testFile)) {
-  console.error(`Source file ${testFile} does not exist.`);
-  process.exit(1);
-}
+const originalEndings = content.includes('\r\n') ? '\r\n' : '\n';
+let lfContent = content.replace(/\r\n/g, '\n');
 
-const content = fs.readFileSync(testFile, 'utf8');
-const lines = content.split('\n');
-console.log('Original lines count:', lines.length);
+const duplicateBlock = "      try {\n        ShadowTester.run(question, tableName, `SELECT * FROM ${tbl}`, rows);\n      } catch (e) { console.warn('Shadow test fail:', e); }\n      try {\n        ShadowTester.run(question, tableName, `SELECT * FROM ${tbl}`, rows);\n      } catch (e) { console.warn('Shadow test fail:', e); }";
 
-let duplicateIdx = -1;
-let duplicateEndIdx = -1;
+const cleanBlock = "      try {\n        ShadowTester.run(question, tableName, `SELECT * FROM ${tbl}`, rows);\n      } catch (e) { console.warn('Shadow test fail:', e); }";
 
-for (let i = 0; i < lines.length; i++) {
-  if (lines[i].includes('KPI Card 1: Sleep Hours')) {
-    // Look ahead to see if another "KPI Card 1: Sleep Hours" exists
-    let nextCommentIdx = -1;
-    for (let j = i + 1; j < Math.min(i + 45, lines.length); j++) {
-      if (lines[j].includes('KPI Card 1: Sleep Hours')) {
-        nextCommentIdx = j;
-        break;
-      }
-    }
-    
-    if (nextCommentIdx !== -1) {
-      duplicateIdx = i;
-      duplicateEndIdx = nextCommentIdx;
-      break;
-    }
-  }
-}
-
-if (duplicateIdx !== -1) {
-  console.log(`Found duplicate stub starting at line: ${duplicateIdx + 1} and ending before line: ${duplicateEndIdx + 1}`);
-  const deleteCount = duplicateEndIdx - duplicateIdx;
-  console.log(`Deleting ${deleteCount} lines...`);
-  const deletedLines = lines.splice(duplicateIdx, deleteCount);
-  console.log('Deleted lines:');
-  deletedLines.forEach((l, idx) => console.log(`  [${idx}] ${l.trim()}`));
-  
-  fs.writeFileSync(targetFile, lines.join('\n'), 'utf8');
-  console.log(`Successfully wrote fixed file to ${targetFile}`);
+if (lfContent.includes(duplicateBlock)) {
+  lfContent = lfContent.replace(duplicateBlock, cleanBlock);
+  console.log("Successfully removed duplicate shadow testing call!");
 } else {
-  console.log('ERROR: Could not find duplicate stub comments.');
+  console.log("Duplicate block not found or already clean.");
 }
+
+let finalContent = lfContent;
+if (originalEndings === '\r\n') {
+  finalContent = lfContent.replace(/\n/g, '\r\n');
+}
+
+fs.writeFileSync(filePath, finalContent, 'utf8');
+console.log("Completed cleanup!");

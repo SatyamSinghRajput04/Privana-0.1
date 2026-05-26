@@ -77,6 +77,22 @@ export const SemanticResolver = {
       }
     }
 
+    // 3. Value-based column resolution (e.g. "Instagram" -> platform_usage)
+    for (const col of profile.columns) {
+      if (col.uniqueValues) {
+        for (const val of col.uniqueValues) {
+          const valStr = String(val).toLowerCase().trim();
+          if (valStr.length > 0 && cleanQ.includes(valStr)) {
+            addMatch(valStr, {
+              columnName: col.name,
+              confidence: 0.90,
+              role: col.type === 'numeric' ? 'metric' : 'groupBy'
+            });
+          }
+        }
+      }
+    }
+
     // Sort by confidence descending
     return resolved.sort((a, b) => b.confidence - a.confidence);
   }

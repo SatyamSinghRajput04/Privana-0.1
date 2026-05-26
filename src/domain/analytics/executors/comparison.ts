@@ -33,21 +33,36 @@ export const ComparisonExecutor = {
       groupStats[key].push(mVal);
     }
 
-    const comparisonRows = Object.entries(groupStats).map(([groupVal, vals]) => {
-      const sorted = [...vals].sort((a, b) => a - b);
-      const sum = vals.reduce((a, b) => a + b, 0);
-      const mean = sum / vals.length;
-      const min = sorted[0];
-      const max = sorted[sorted.length - 1];
+    // Filter comparison groups if filters are specified for the groupBy column
+    const allowedGroupVals = new Set<string>();
+    if (plan.filters) {
+      for (const filter of plan.filters) {
+        if (filter.column === groupKeyCol && filter.operator === '=') {
+          allowedGroupVals.add(String(filter.value).toLowerCase());
+        }
+      }
+    }
 
-      return {
-        group_label: groupVal,
-        mean,
-        count: vals.length,
-        min,
-        max,
-      };
-    });
+    const comparisonRows = Object.entries(groupStats)
+      .filter(([groupVal]) => {
+        if (allowedGroupVals.size === 0) return true;
+        return allowedGroupVals.has(groupVal.toLowerCase());
+      })
+      .map(([groupVal, vals]) => {
+        const sorted = [...vals].sort((a, b) => a - b);
+        const sum = vals.reduce((a, b) => a + b, 0);
+        const mean = sum / vals.length;
+        const min = sorted[0];
+        const max = sorted[sorted.length - 1];
+
+        return {
+          group_label: groupVal,
+          mean,
+          count: vals.length,
+          min,
+          max,
+        };
+      });
 
     const hasSmallCells = comparisonRows.some(r => r.count < 5);
 

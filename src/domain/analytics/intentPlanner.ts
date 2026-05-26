@@ -66,6 +66,9 @@ export const IntentPlanner = {
     ) {
       // Check if it's actually grouped average or ranking
       if (q.includes('average') || q.includes('mean') || q.includes('avg')) {
+        if (/\btop[_\s]*\d+/.test(q) || /\bbottom[_\s]*\d+/.test(q) || q.includes('top 5') || q.includes('top 10')) {
+          return { intent: 'ranking', confidence: 0.90 };
+        }
         return { intent: 'grouped_average', confidence: 0.85 };
       }
       return { intent: 'ranking', confidence: 0.90 };

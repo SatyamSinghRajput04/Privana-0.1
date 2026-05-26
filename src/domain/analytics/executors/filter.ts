@@ -65,7 +65,7 @@ export const FilterExecutor = {
     });
 
     return {
-      status: filteredRows.length < 5 ? 'partial_small_n' : 'success',
+      status: 'success',
       rows: filteredRows,
       metadata: {
         filterCount: filters.length,

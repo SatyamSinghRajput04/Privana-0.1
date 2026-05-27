@@ -18,6 +18,9 @@ import {
   Menu, Info, Star, ShieldAlert, Sparkles, FolderClosed, RefreshCw, TrendingUp,
   Send, X, MessageSquare
 } from 'lucide-react';
+import { isFlagOn } from '../lib/flags';
+import { DatasetValidator } from '../domain/validator/validator';
+import { SchemaIntelligence } from '../domain/analytics/schemaIntelligence';
 
 // ---------------------------------------------------------------------------
 // Self-contained Markdown renderer â€” no external deps.
@@ -368,7 +371,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
       const rows = executeSQL(`SELECT * FROM ${tbl}`);
       const profile = DatasetValidator.profile(rows, tableName);
       const questions = SchemaIntelligence.suggestQuestions(profile);
-      return questions.map((q, idx) => ({
+      return questions.map((q: string, idx: number) => ({
         title: `💡 Suggested Query ${idx + 1}`,
         desc: q,
         query: q
@@ -2977,8 +2980,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                     <span style={{ fontSize: '0.72rem', color: '#a1a1aa', flex: 1, lineHeight: 1.4 }}>
                       {/* Show the first meaningful line â€” strip markdown headers/bold/emoji */}
                       {(() => {
-                        const lines = qaResponse.split('\n').map(l => l.trim()).filter(Boolean);
-                        const headline = lines.find(l =>
+                        const lines = qaResponse.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                        const headline = lines.find((l: string) =>
                           l.length > 10 &&
                           !l.startsWith('|') &&
                           !l.startsWith('```')
@@ -3769,7 +3772,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                         <div style={{ background: '#0e0e12', border: '1px solid #1f1f23', borderRadius: '12px', padding: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           <span style={{ fontSize: '0.62rem', color: '#52525b', fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>Suggested Queries</span>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                            {suggestedCards.map((item, idx) => (
+                            {suggestedCards.map((item: { title: string; desc: string; query: string }, idx: number) => (
                               <div key={idx} onClick={() => handleRunPresetQuestion(item.query)}
                                 style={{ background: '#09090c', border: '1px solid #1f1f23', borderRadius: '8px', padding: '0.6rem 0.75rem', cursor: 'pointer', transition: 'all 0.15s ease', display: 'flex', alignItems: 'center', gap: '0.6rem' }}
                                 onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(239,68,68,0.4)'; e.currentTarget.style.background = '#110a0d'; e.currentTarget.style.transform = 'translateX(2px)'; }}

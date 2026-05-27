@@ -43,6 +43,26 @@ interface ComputedViewProps {
 
 const POWER_BI_COLORS = ['#ef4444', '#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ec4899'];
 
+const formatFieldName = (value: unknown) => String(value ?? '')
+  .replace(/_/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const formatPanelTitle = (title?: string) => {
+  const cleaned = String(title || 'Analysis Visualization')
+    .replace(/Top\s+\d{6,}\s+/i, 'Top ')
+    .replace(/\bID undefined\b/gi, 'Highest ranked record');
+  return formatFieldName(cleaned);
+};
+
+const formatKpiValue = (value: string | number) => {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2);
+  }
+  return formatFieldName(value);
+};
+
 const getKpiIcon = (label: string) => {
   const l = label.toLowerCase();
   if (l.includes('correlation') || l.includes('significance') || l.includes('r')) {
@@ -70,6 +90,10 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   const layout = ResultToVisualContext.map(result);
   const isPartial = result.status === 'partial';
   const reasons = (result as any).reasons || [];
+  const displayNarrative = (result.narrative || '')
+    .replace(/ID undefined/gi, 'the highest-ranked record')
+    .replace(/a association/gi, 'an association');
+  const question = result.provenance?.question || 'Custom analysis';
 
   const hasNoData = !result.data || 
     (Array.isArray(result.data) && result.data.length === 0) ||
@@ -80,7 +104,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
       <div className="flex flex-col gap-6 w-full">
         {/* 1. Narrative Card */}
         <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/30 backdrop-blur-md">
-          <SimpleMarkdown text={result.narrative || "No records matched your specific filters."} />
+          <SimpleMarkdown text={displayNarrative || "No records matched your specific filters."} />
           <div className="mt-3 pt-2 border-t border-zinc-800/40 flex items-center justify-between">
             <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
               Computed by: New Analytics Engine
@@ -128,6 +152,39 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
 
   return (
     <div className="flex flex-col gap-4 w-full">
+      <div
+        className="rounded-2xl border border-red-500/15 bg-[radial-gradient(circle_at_top_left,rgba(239,68,68,0.12),transparent_34%),linear-gradient(135deg,rgba(18,18,24,0.96),rgba(8,4,5,0.98))] p-4 shadow-2xl"
+        style={{ boxShadow: '0 18px 50px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.03)' }}
+      >
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-300">
+                New Analytics Engine
+              </span>
+              <span className="rounded-full border border-red-400/20 bg-red-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-red-300">
+                {isPartial ? 'Partial With Caveats' : 'Computed Result'}
+              </span>
+            </div>
+            <h2 className="mt-3 text-xl font-black leading-tight tracking-tight text-zinc-50">
+              {formatFieldName(result.plan.intent)} Dashboard
+            </h2>
+            <p className="mt-1 max-w-3xl truncate text-xs text-zinc-400">
+              {question}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-right text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+            <div className="rounded-xl border border-zinc-800/80 bg-black/20 px-3 py-2">
+              <div className="font-bold text-zinc-400">Rows Used</div>
+              <div className="mt-1 text-sm font-black text-zinc-100">{(result.data?.rows?.length || 0).toLocaleString()}</div>
+            </div>
+            <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/5 px-3 py-2">
+              <div className="font-bold text-emerald-300/80">Privacy</div>
+              <div className="mt-1 text-sm font-black text-emerald-300">Local</div>
+            </div>
+          </div>
+        </div>
+      </div>
       
       {/* ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
          ROW 1: POWER BI-STYLE KPI ROW (Always perfect 4 cards grid)
@@ -136,7 +193,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
         {displayKpis.map((kpi, idx) => (
           <div 
             key={idx}
-            className="p-3 rounded-xl border bg-gradient-to-br from-[#0e0e12] to-[#080405] relative overflow-hidden group shadow-lg flex flex-col justify-between"
+            className="p-3.5 rounded-2xl border bg-gradient-to-br from-[#12121a] via-[#0d0d12] to-[#080405] relative overflow-hidden group shadow-lg flex flex-col justify-between"
             style={{ 
               borderColor: kpi.color ? `${kpi.color}25` : '#1f1f23',
               boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.01), 0 4px 12px rgba(0, 0, 0, 0.3)'
@@ -161,7 +218,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
               className="text-xl font-black truncate leading-tight tracking-tight my-0.5"
               style={{ color: kpi.color || '#f4f4f5', textShadow: kpi.color ? `0 0 10px ${kpi.color}15` : 'none' }}
             >
-              {kpi.value}
+              {formatKpiValue(kpi.value)}
             </div>
             
             {kpi.subText && (
@@ -179,11 +236,11 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-3">
         {/* LEFT COLUMN: Premium Chart Panel (Takes 3 columns / 60% width) */}
         {layout.chartType !== 'none' && layout.data.length > 0 ? (
-          <div className="xl:col-span-3 p-4 rounded-xl border border-zinc-800/80 bg-zinc-950/40 shadow-lg flex flex-col justify-between">
+          <div className="xl:col-span-3 p-4 rounded-2xl border border-zinc-800/80 bg-[linear-gradient(145deg,rgba(12,12,18,0.94),rgba(4,4,7,0.98))] shadow-lg flex flex-col justify-between">
             <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2 mb-3">
               <div className="text-xs font-bold text-zinc-300 flex items-center gap-1.5 uppercase tracking-wide">
                 <TrendingUp size={13} className="text-red-400" />
-                <span>{layout.title}</span>
+                <span>{formatPanelTitle(layout.title)}</span>
               </div>
               <span className="text-[9px] font-mono text-zinc-500 uppercase px-1.5 py-0.5 rounded border border-zinc-800 bg-zinc-900/60">
                 {layout.chartType}
@@ -200,6 +257,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                       stroke="#52525b" 
                       fontSize={9}
                       tickLine={false}
+                      tickFormatter={formatFieldName}
                     />
                     <YAxis 
                       stroke="#52525b" 
@@ -230,6 +288,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                       stroke="#52525b" 
                       fontSize={9}
                       tickLine={false}
+                      tickFormatter={formatFieldName}
                     />
                     <YAxis 
                       stroke="#52525b" 
@@ -313,7 +372,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
         <div className="xl:col-span-2 flex flex-col gap-3">
           {/* A. Narrative / AI Explanation */}
           <div 
-            className="p-4 rounded-xl border shadow-lg flex-1 flex flex-col justify-between"
+            className="p-4 rounded-2xl border shadow-lg flex-1 flex flex-col justify-between"
             style={{ 
               background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.04) 0%, rgba(139, 92, 246, 0.02) 100%)',
               borderColor: 'rgba(239, 68, 68, 0.16)'
@@ -325,7 +384,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                   AI Interpretation
                 </span>
               </div>
-              <SimpleMarkdown text={result.narrative} />
+              <SimpleMarkdown text={displayNarrative} />
             </div>
 
             <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mt-3 pt-2 border-t border-zinc-800/30 flex items-center justify-between">
@@ -344,7 +403,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
         // Strip out Recharts auto key columns
         const keys = Object.keys(rows[0] || {}).filter(k => k !== 'key' && k !== 'id');
         return (
-          <div className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-950/40 shadow-lg flex flex-col gap-2">
+          <div className="p-3.5 rounded-2xl border border-zinc-800/80 bg-[linear-gradient(180deg,rgba(12,12,18,0.9),rgba(4,4,7,0.96))] shadow-lg flex flex-col gap-2">
             <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2">
               <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1">
                 <Database size={11} className="text-zinc-400" />
@@ -359,7 +418,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-400 font-semibold bg-zinc-900/30">
                     {keys.map(k => (
-                      <th key={k} className="p-1.5 truncate capitalize tracking-wide">{k.replace(/_/g, ' ')}</th>
+                      <th key={k} className="p-1.5 truncate tracking-wide">{formatFieldName(k)}</th>
                     ))}
                   </tr>
                 </thead>

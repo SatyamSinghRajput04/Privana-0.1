@@ -18,14 +18,20 @@ export const RankingExecutor = {
       return { status: 'partial_missing', rows: [] };
     }
 
-    // Default limit
-    let limit = 5;
+    // Default to a safe dashboard-sized Top 5 unless the query explicitly asks for a small limit.
+    let limit = typeof plan.limit === 'number' && Number.isFinite(plan.limit)
+      ? Math.min(Math.max(Math.floor(plan.limit), 1), 50)
+      : 5;
 
-    // Extract limit from planId or custom instructions if available
+    // Backward-compatible test support for older planIds such as plan_ranking_3.
     const planIdStr = plan.planId.toLowerCase();
-    const topMatch = planIdStr.match(/top[_\s]*(\d+)/) || plan.planId.match(/ranking[_\s]*(\d+)/);
-    if (topMatch) {
-      limit = parseInt(topMatch[1], 10);
+    const topMatch = planIdStr.match(/(?:^|[_\s])top[_\s]*(\d{1,2})(?:$|[_\s])/) ||
+      planIdStr.match(/(?:^|[_\s])ranking[_\s]*(\d{1,2})(?:$|[_\s])/);
+    if (!plan.limit && topMatch) {
+      const parsedLimit = parseInt(topMatch[1], 10);
+      if (parsedLimit >= 1 && parsedLimit <= 50) {
+        limit = parsedLimit;
+      }
     }
 
     let rankedRows: any[] = [];
@@ -54,7 +60,10 @@ export const RankingExecutor = {
 
       validRows.sort((a, b) => b.metric_value - a.metric_value);
 
-      rankedRows = validRows.slice(0, limit);
+      rankedRows = validRows.slice(0, limit).map((row, idx) => ({
+        ...row,
+        rank_label: row.id ? String(row.id) : `Rank ${idx + 1}`,
+      }));
       status = validRows.length < 5 ? 'partial_small_n' : 'success';
       metadata = {
         ...metadata,

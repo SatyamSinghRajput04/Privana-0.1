@@ -21,6 +21,13 @@ export const SlotResolver = {
     // 1. Resolve Filters from the query text
     const cleanQ = question.toLowerCase();
     const filterList: Filter[] = [];
+    const topLimitMatch = cleanQ.match(/\b(?:top|first)\s+(\d{1,2})\b/);
+    const bottomLimitMatch = cleanQ.match(/\bbottom\s+(\d{1,2})\b/);
+    const requestedLimit = topLimitMatch?.[1] || bottomLimitMatch?.[1];
+
+    if (requestedLimit) {
+      result.limit = Math.min(Math.max(parseInt(requestedLimit, 10), 1), 50);
+    }
 
     // Pattern 1: [column] above/greater than [value]
     const aboveRegex = /(\b[a-z0-9_]+\b)\s*(?:above|greater than|>)\s*(\d+(?:\.\d+)?)/g;

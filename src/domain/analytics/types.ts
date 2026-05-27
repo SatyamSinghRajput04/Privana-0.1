@@ -37,6 +37,7 @@ export interface AnalysisPlan {
   groupBy?: string[];
   filters?: Filter[];
   target?: string;
+  limit?: number;
   confidence: number;
   source: 'pattern' | 'semantic' | 'llm';
   datasetHash?: string;

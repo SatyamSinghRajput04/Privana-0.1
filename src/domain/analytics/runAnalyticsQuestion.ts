@@ -84,6 +84,7 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       groupBy: resolvedSlots.groupBy,
       filters: resolvedSlots.filters,
       target: resolvedSlots.target,
+      limit: resolvedSlots.limit,
       confidence: plannedIntent.confidence,
       source: 'pattern',
     };
@@ -266,14 +267,17 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
         narrative = `Computed ranked associations with target outcome **${plan.target}**.`;
       }
     } else if (plan.intent === 'ranking') {
+      const limit = execResult.metadata?.limit || plan.limit || 5;
       chartSpec.chartType = 'bar';
-      chartSpec.xAxisKey = execResult.metadata?.isGrouped ? 'category_label' : 'id';
+      chartSpec.xAxisKey = execResult.metadata?.isGrouped ? 'category_label' : 'rank_label';
       chartSpec.yAxisKey = execResult.metadata?.isGrouped ? 'average_value' : 'metric_value';
-      chartSpec.title = `Top ${execResult.metadata?.limit} ranking of ${plan.metric}`;
+      chartSpec.title = `Top ${limit} ranking of ${plan.metric}`;
 
-      narrative = `Here are the top ${execResult.metadata?.limit} ranked entries by **${plan.metric}**. `;
+      narrative = `Here are the top ${limit} ranked entries by **${plan.metric}**. `;
       if (execResult.rows[0]) {
-        const topLabel = execResult.metadata?.isGrouped ? execResult.rows[0].category_label : `ID ${execResult.rows[0].id}`;
+        const topLabel = execResult.metadata?.isGrouped
+          ? execResult.rows[0].category_label
+          : execResult.rows[0].id || execResult.rows[0].rank_label || `${plan.metric} = ${execResult.rows[0].metric_value}`;
         narrative += `The top rank belongs to **${topLabel}**.`;
       }
     } else if (plan.intent === 'filter') {

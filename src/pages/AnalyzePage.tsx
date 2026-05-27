@@ -2992,6 +2992,9 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                         Analytics Pipeline: {analyticsPipelineEnabled ? 'New Engine Active' : 'Legacy Mode'}
                       </span>
                       <button
+                        type="button"
+                        aria-label="Toggle analytics pipeline"
+                        aria-pressed={analyticsPipelineEnabled}
                         onClick={() => {
                           const nextVal = !analyticsPipelineEnabled;
                           localStorage.setItem('flags_USE_NEW_ANALYTICS_PIPELINE', String(nextVal));

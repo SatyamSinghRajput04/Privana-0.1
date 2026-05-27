@@ -21,6 +21,10 @@ import {
 import { isFlagOn } from '../lib/flags';
 import { DatasetValidator } from '../domain/validator/validator';
 import { SchemaIntelligence } from '../domain/analytics/schemaIntelligence';
+import { runAnalyticsQuestion } from '../domain/analytics/runAnalyticsQuestion';
+import { ResultView } from '../domain/analytics/features/result-view/ResultView';
+import { PlanPreview } from '../domain/analytics/features/plan-preview/PlanPreview';
+import { EvalLogger } from '../domain/analytics/evalLogger';
 
 // ---------------------------------------------------------------------------
 // Self-contained Markdown renderer â€” no external deps.
@@ -1711,10 +1715,63 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const handleAskAI = (overrideInput?: string) => {
     const inputToUse = (overrideInput || qaInput).trim();
     if (!inputToUse) return;
-    setQaLoading(true);
+
+    // Clear stale state before any routing
     setQaResponse(null);
+    setAnalyticalContext(null);
+    setIsFilterQueryActive(false);
+
+    setQaLoading(true);
     setLoadingStage(0);
 
+    if (analyticsPipelineEnabled && selectedDataset) {
+      // Staged loading transitions for premium feel
+      setTimeout(() => setLoadingStage(1), 200);
+      setTimeout(() => setLoadingStage(2), 450);
+      setTimeout(() => setLoadingStage(3), 650);
+
+      const runNewPipeline = async () => {
+        try {
+          const tableName = selectedDataset.name;
+          const tbl = getSqlTableName(tableName);
+          const rows = executeSQL(`SELECT * FROM ${tbl}`);
+          const profile = DatasetValidator.profile(rows, tableName);
+          
+          const context = {
+            tableName,
+            rows,
+            profile,
+          };
+          
+          const result = await runAnalyticsQuestion(inputToUse, context);
+          
+          // Log results locally
+          try {
+            await EvalLogger.log(inputToUse, result);
+          } catch (logErr) {
+            console.error('Failed to log evaluation run:', logErr);
+          }
+          
+          setQaResponse(result);
+          setAnalyticalContext(null); // Managed inside ResultView / ComputedView
+        } catch (err: any) {
+          console.error('Error in new analytics pipeline:', err);
+          setQaResponse({
+            status: 'error',
+            errorId: `err_${Date.now()}`,
+            message: err.message || 'An unexpected error occurred in the analytics pipeline.'
+          });
+          setAnalyticalContext(null);
+        } finally {
+          setQaLoading(false);
+        }
+      };
+      
+      runNewPipeline();
+      return; // Return early! Bypasses all legacy code.
+    }
+
+    // --- LEGACY ROLLBACK PATH ---
     // Staged loading transitions
     setTimeout(() => setLoadingStage(1), 200);
     setTimeout(() => setLoadingStage(2), 450);
@@ -2902,14 +2959,65 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                 flexShrink: 0,
                 boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.01)'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <Sparkles size={14} style={{ color: '#ef4444' }} />
                   <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#f4f4f5', letterSpacing: '-0.01em' }}>
                     Ask a question about your data
                   </span>
-                  <span style={{ fontSize: '0.55rem', background: 'rgba(239, 68, 68, 0.08)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.18)', padding: '1px 5px', borderRadius: '3px', marginLeft: 'auto', fontFamily: 'var(--mono)' }}>
-                    Local LLM active
-                  </span>
+                  
+                  {/* Pipeline Toggle and Badge */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.15rem', marginLeft: 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                      <span style={{ 
+                        fontSize: '0.58rem', 
+                        fontWeight: 700,
+                        color: analyticsPipelineEnabled ? '#10b981' : '#a1a1aa', 
+                        background: analyticsPipelineEnabled ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.03)', 
+                        border: `1px solid ${analyticsPipelineEnabled ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)'}`, 
+                        padding: '2px 6px', 
+                        borderRadius: '4px',
+                        textTransform: 'uppercase' as const,
+                        letterSpacing: '0.02em'
+                      }}>
+                        Analytics Pipeline: {analyticsPipelineEnabled ? 'New Engine Active' : 'Legacy Mode'}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const nextVal = !analyticsPipelineEnabled;
+                          localStorage.setItem('flags_USE_NEW_ANALYTICS_PIPELINE', String(nextVal));
+                          localStorage.setItem('flags_USE_NEW_ANALYTICS_VISUALS', String(nextVal));
+                          setAnalyticsPipelineEnabled(nextVal);
+                        }}
+                        style={{
+                          width: '28px',
+                          height: '16px',
+                          background: analyticsPipelineEnabled ? '#10b981' : '#27272a',
+                          borderRadius: '999px',
+                          border: 'none',
+                          cursor: 'pointer',
+                          position: 'relative',
+                          padding: 0,
+                          transition: 'background 0.2s ease-in-out'
+                        }}
+                      >
+                        <div style={{
+                          width: '12px',
+                          height: '12px',
+                          background: '#fff',
+                          borderRadius: '50%',
+                          position: 'absolute' as const,
+                          top: '2px',
+                          left: analyticsPipelineEnabled ? '14px' : '2px',
+                          transition: 'left 0.2s ease-in-out'
+                        }} />
+                      </button>
+                    </div>
+                    {isDev && (
+                      <span style={{ fontSize: '0.52rem', color: '#52525b', fontFamily: 'var(--mono)' }}>
+                        Pipeline flags: pipeline={String(analyticsPipelineEnabled)}, visuals={String(analyticsPipelineEnabled)}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 
                 <div style={{ display: 'flex', gap: '0.55rem' }}>
@@ -2962,7 +3070,20 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                   </button>
                 </div>
 
-                {qaResponse && (
+                                {qaResponse && typeof qaResponse === 'object' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                    <ResultView 
+                      result={qaResponse} 
+                      onSelectChoice={(choice) => handleRunPresetQuestion(choice.question)}
+                      onSelectQuestion={handleRunPresetQuestion} 
+                    />
+                    {isDev && (
+                      <PlanPreview plan={(qaResponse as any).plan || (qaResponse as any).choices?.[0]?.plan} />
+                    )}
+                  </div>
+                )}
+
+                {qaResponse && typeof qaResponse === 'string' && (
                   <motion.div
                     initial={{ opacity: 0, y: -5 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -2976,9 +3097,9 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                       gap: '0.6rem',
                     }}
                   >
-                    <span style={{ fontSize: '0.85rem', flexShrink: 0 }}>ðŸ’¡</span>
+                    <span style={{ fontSize: '0.85rem', flexShrink: 0 }}>💡</span>
                     <span style={{ fontSize: '0.72rem', color: '#a1a1aa', flex: 1, lineHeight: 1.4 }}>
-                      {/* Show the first meaningful line â€” strip markdown headers/bold/emoji */}
+                      {/* Show the first meaningful line — strip markdown headers/bold/emoji */}
                       {(() => {
                         const lines = qaResponse.split('\n').map((l: string) => l.trim()).filter(Boolean);
                         const headline = lines.find((l: string) =>
@@ -2989,7 +3110,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                         return headline
                           .replace(/^#+\s*/, '')
                           .replace(/\*\*/g, '')
-                          .replace(/^ðŸš¨|^âš ï¸|^ðŸ§ |^ðŸ“Š|^ðŸ“‰|^ðŸ“ˆ/, '')
+                          .replace(/^🚨|^⚠️|^🧠|^📊|^📈|^📉/, '')
                           .trim()
                           .slice(0, 160);
                       })()}

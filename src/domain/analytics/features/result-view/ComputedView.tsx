@@ -45,6 +45,39 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   const isPartial = result.status === 'partial';
   const reasons = (result as any).reasons || [];
 
+  const hasNoData = !result.data || 
+    (Array.isArray(result.data) && result.data.length === 0) ||
+    (layout.chartType !== 'none' && (!layout.data || layout.data.length === 0));
+
+  if (hasNoData) {
+    return (
+      <div className="flex flex-col gap-6 w-full">
+        {/* 1. Narrative Card */}
+        <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/30 backdrop-blur-md">
+          <SimpleMarkdown text={result.narrative || "No records matched your specific filters."} />
+          <div className="mt-3 pt-2 border-t border-zinc-800/40 flex items-center justify-between">
+            <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
+              Computed by: New Analytics Engine
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Empty State Banner */}
+        <div className="p-8 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center flex flex-col items-center justify-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 text-lg">
+            🔍
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-200">No matching records found</h3>
+            <p className="text-xs text-zinc-500 max-w-sm mt-1 mx-auto leading-relaxed">
+              The query executed successfully on the local SQLite engine, but the active database query returned zero rows. Try broadening your criteria or selecting another schema field.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6 w-full">
       {/* 1. Narrative Card */}

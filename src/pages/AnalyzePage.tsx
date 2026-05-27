@@ -24,6 +24,7 @@ import { SchemaIntelligence } from '../domain/analytics/schemaIntelligence';
 import { runAnalyticsQuestion } from '../domain/analytics/runAnalyticsQuestion';
 import { ResultView } from '../domain/analytics/features/result-view/ResultView';
 import { PlanPreview } from '../domain/analytics/features/plan-preview/PlanPreview';
+import { QueryReadyState } from '../domain/analytics/features/query-ready/QueryReadyState';
 import { EvalLogger } from '../domain/analytics/evalLogger';
 
 // ---------------------------------------------------------------------------
@@ -278,6 +279,15 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const [qaResponse, setQaResponse] = useState<any | null>(null);
   const [analyticsPipelineEnabled, setAnalyticsPipelineEnabled] = useState(() => isFlagOn('USE_NEW_ANALYTICS_PIPELINE'));
   const isDev = typeof process !== 'undefined' ? process.env?.NODE_ENV !== 'production' : ((import.meta as any).env?.DEV ?? true);
+
+  const resultContainerRef = useRef<HTMLDivElement>(null);
+  const hasQueryResult = qaResponse && typeof qaResponse === 'object';
+
+  useEffect(() => {
+    if (hasQueryResult && resultContainerRef.current) {
+      resultContainerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [qaResponse, hasQueryResult]);
 
   // --- CONTEXTUAL VISUALIZATION STATE ---
   type AnalyticalContext = {
@@ -3352,7 +3362,41 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                    UNIFIED DASHBOARD SHELL â€” permanent operating system
                    All query types render inside this grid. Only data changes.
                    ═══════════════════════════════════════════════════════════════════ */
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
+                analyticsPipelineEnabled ? (
+                    hasQueryResult ? (
+                      /* STATE 3: Query Result Dashboard */
+                      <div ref={resultContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
+                        <ResultView 
+                          result={qaResponse} 
+                          onSelectChoice={(choice) => handleRunPresetQuestion(choice.question)}
+                          onSelectQuestion={handleRunPresetQuestion} 
+                        />
+                        {isDev && (
+                          <PlanPreview plan={(qaResponse as any).plan || (qaResponse as any).choices?.[0]?.plan} />
+                        )}
+                      </div>
+                    ) : (
+                      /* STATE 2: Ready State for New Engine */
+                      <QueryReadyState 
+                        datasetName={selectedDataset.name}
+                        rowCount={kpis.records > 0 ? kpis.records : selectedDataset.row_count ?? 0}
+                        columns={columnsList}
+                        suggestedQuestions={suggestedCards}
+                        onSelectField={(fieldName) => {
+                          setQaInput(prev => {
+                            const trimmed = prev.trim();
+                            if (!trimmed) return fieldName;
+                            return `${trimmed} ${fieldName}`;
+                          });
+                        }}
+                        onSelectQuestion={handleRunPresetQuestion}
+                      />
+                    )
+                  ) : (
+                    /* LEGACY MODE: Original static dashboard shell */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
+                      
+
 
                   {/* â”€â”€ Dashboard Header Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0, paddingBottom: '0.1rem' }}>
@@ -4044,7 +4088,10 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                     </div>
                   )}
 
-                </div>
+                
+
+                    </div>
+                  )
               )}
               </div>
 

@@ -3080,18 +3080,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                   </button>
                 </div>
 
-                                {qaResponse && typeof qaResponse === 'object' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                    <ResultView 
-                      result={qaResponse} 
-                      onSelectChoice={(choice) => handleRunPresetQuestion(choice.question)}
-                      onSelectQuestion={handleRunPresetQuestion} 
-                    />
-                    {isDev && (
-                      <PlanPreview plan={(qaResponse as any).plan || (qaResponse as any).choices?.[0]?.plan} />
-                    )}
-                  </div>
-                )}
+
 
                 {qaResponse && typeof qaResponse === 'string' && (
                   <motion.div

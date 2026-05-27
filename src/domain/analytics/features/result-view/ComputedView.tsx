@@ -1,53 +1,47 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// src/domain/analytics/features/result-view/ComputedView.tsx
+// S10 COMPUTED VIEW — Renders natural narratives, charts, and KPIs in Power BI style.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import React from 'react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  ScatterChart,
-  Scatter,
-  PieChart,
-  Pie,
-  Cell,
-  ZAxis,
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  LineChart, Line, ScatterChart, Scatter, PieChart, Pie, Cell, ZAxis 
 } from 'recharts';
-import {
-  AlertTriangle,
-  Activity,
-  BarChart3,
-  Database,
-  LockKeyhole,
-  Rows3,
-  ShieldCheck,
-  Sparkles,
-  TrendingUp,
+import { 
+  AlertTriangle, TrendingUp, Users, Database, Shield, Sparkles, 
+  Activity, Hash, Server
 } from 'lucide-react';
 import { ResultToVisualContext } from '../../resultToVisualContext';
 import { AnalyticsResult } from '../../types';
+
+// Self-contained inline markdown formatter for the narrative
+const SimpleMarkdown: React.FC<{ text: string }> = ({ text }) => {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return (
+    <p className="text-sm text-zinc-300 leading-relaxed">
+      {parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={i} className="font-bold text-zinc-100">{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith('`') && part.endsWith('`')) {
+          return (
+            <code key={i} className="font-mono bg-zinc-950 px-1.5 py-0.5 rounded text-red-400 border border-zinc-800 text-xs mx-0.5">
+              {part.slice(1, -1)}
+            </code>
+          );
+        }
+        return part;
+      })}
+    </p>
+  );
+};
 
 interface ComputedViewProps {
   result: Extract<AnalyticsResult, { status: 'computed' | 'partial' }>;
 }
 
-type KpiCard = {
-  label: string;
-  value: string | number;
-  subText?: string;
-  color?: string;
-};
-
-const CHART_COLORS = ['#fb4d55', '#2f80ed', '#17b890', '#9b5cf6', '#f5a524', '#ec4899'];
-const CARD_BACKGROUNDS = [
-  'linear-gradient(135deg, #fff7ed 0%, #ffe4e6 100%)',
-  'linear-gradient(135deg, #ecfeff 0%, #dbeafe 100%)',
-  'linear-gradient(135deg, #f0fdf4 0%, #ccfbf1 100%)',
-  'linear-gradient(135deg, #faf5ff 0%, #fce7f3 100%)',
-];
+const POWER_BI_COLORS = ['#ef4444', '#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ec4899'];
 
 const formatFieldName = (value: unknown) => String(value ?? '')
   .replace(/_/g, ' ')
@@ -55,355 +49,429 @@ const formatFieldName = (value: unknown) => String(value ?? '')
   .trim()
   .replace(/\b\w/g, (char) => char.toUpperCase());
 
-const cleanNarrative = (value: string) => value
-  .replace(/ID undefined/gi, 'the highest-ranked record')
-  .replace(/a association/gi, 'an association')
-  .trim();
-
-const formatNumber = (value: number) => (
-  Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2)
-);
-
-const formatValue = (value: string | number) => {
-  if (typeof value === 'number') return formatNumber(value);
-  if (/^\d+(\.\d+)?$/.test(value)) return value;
-  return formatFieldName(value);
-};
-
-const formatChartTitle = (title?: string) => {
+const formatPanelTitle = (title?: string) => {
   const cleaned = String(title || 'Analysis Visualization')
     .replace(/Top\s+\d{6,}\s+/i, 'Top ')
     .replace(/\bID undefined\b/gi, 'Highest ranked record');
   return formatFieldName(cleaned);
 };
 
-const markdownParts = (text: string) => text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-
-const NarrativeText: React.FC<{ text: string; tone?: 'light' | 'dark' }> = ({ text, tone = 'dark' }) => (
-  <p className={tone === 'light' ? 'text-sm leading-7 text-slate-700' : 'text-sm leading-7 text-zinc-100'}>
-    {markdownParts(text).map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return (
-          <strong key={index} className={tone === 'light' ? 'font-black text-slate-950' : 'font-black text-white'}>
-            {part.slice(2, -2)}
-          </strong>
-        );
-      }
-      if (part.startsWith('`') && part.endsWith('`')) {
-        return (
-          <code key={index} className="mx-1 rounded-md bg-slate-950/90 px-1.5 py-0.5 font-mono text-[11px] text-rose-200">
-            {part.slice(1, -1)}
-          </code>
-        );
-      }
-      return part;
-    })}
-  </p>
-);
-
-const kpiIcon = (label: string) => {
-  const lower = label.toLowerCase();
-  if (lower.includes('security') || lower.includes('privacy')) return <ShieldCheck size={18} />;
-  if (lower.includes('row') || lower.includes('record') || lower.includes('sample')) return <Rows3 size={18} />;
-  if (lower.includes('correlation') || lower.includes('significance')) return <TrendingUp size={18} />;
-  if (lower.includes('group') || lower.includes('predictor') || lower.includes('target')) return <Sparkles size={18} />;
-  return <Activity size={18} />;
+const formatKpiValue = (value: string | number) => {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2);
+  }
+  return formatFieldName(value);
 };
 
-const MetricTile: React.FC<{ kpi: KpiCard; index: number }> = ({ kpi, index }) => (
-  <div
-    className="relative overflow-hidden rounded-[22px] border border-white/70 p-4 shadow-[0_14px_40px_rgba(15,23,42,0.10)]"
-    style={{ background: CARD_BACKGROUNDS[index % CARD_BACKGROUNDS.length] }}
-  >
-    <div className="absolute -right-5 -top-8 h-20 w-20 rounded-full bg-white/45" />
-    <div className="relative flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
-          {kpi.label}
-        </div>
-        <div
-          className="mt-2 truncate text-2xl font-black leading-none tracking-tight"
-          style={{ color: kpi.color || '#111827' }}
-        >
-          {formatValue(kpi.value)}
-        </div>
-        {kpi.subText && (
-          <div className="mt-2 truncate text-xs font-semibold text-slate-500">
-            {kpi.subText}
-          </div>
-        )}
-      </div>
-      <div
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/70 bg-white/65 shadow-sm"
-        style={{ color: kpi.color || '#ef4444' }}
-      >
-        {kpiIcon(kpi.label)}
-      </div>
-    </div>
-  </div>
-);
+const getKpiIcon = (label: string) => {
+  const l = label.toLowerCase();
+  if (l.includes('correlation') || l.includes('significance') || l.includes('r')) {
+    return <TrendingUp size={14} className="text-purple-400" />;
+  }
+  if (l.includes('predict') || l.includes('predictor') || l.includes('target') || l.includes('outcome')) {
+    return <Sparkles size={14} className="text-amber-400" />;
+  }
+  if (l.includes('group') || l.includes('compared') || l.includes('sample') || l.includes('highest')) {
+    return <Users size={14} className="text-blue-400" />;
+  }
+  if (l.includes('record') || l.includes('scanned') || l.includes('match') || l.includes('count')) {
+    return <Database size={14} className="text-pink-400" />;
+  }
+  if (l.includes('privacy') || l.includes('shield') || l.includes('engine') || l.includes('status')) {
+    return <Shield size={14} className="text-emerald-400" />;
+  }
+  if (l.includes('difference') || l.includes('max') || l.includes('p-value') || l.includes('significance')) {
+    return <Activity size={14} className="text-rose-400" />;
+  }
+  return <Hash size={14} className="text-zinc-400" />;
+};
 
 export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   const layout = ResultToVisualContext.map(result);
   const isPartial = result.status === 'partial';
   const reasons = (result as any).reasons || [];
-  const rows = result.data?.rows || [];
-  const narrative = cleanNarrative(result.narrative || 'The analysis completed successfully.');
+  const displayNarrative = (result.narrative || '')
+    .replace(/ID undefined/gi, 'the highest-ranked record')
+    .replace(/a association/gi, 'an association');
   const question = result.provenance?.question || 'Custom analysis';
-  const boardTitle = `${formatFieldName(result.plan.intent)} Analysis`;
 
-  const hasNoData = !result.data ||
-    rows.length === 0 ||
+  const hasNoData = !result.data || 
+    (Array.isArray(result.data) && result.data.length === 0) ||
     (layout.chartType !== 'none' && (!layout.data || layout.data.length === 0));
-
-  const displayKpis: KpiCard[] = layout.kpis.slice(0, 4);
-  if (displayKpis.length === 0) {
-    displayKpis.push({
-      label: 'Rows Returned',
-      value: rows.length,
-      subText: 'Local query output',
-      color: '#fb4d55',
-    });
-  }
-
-  const renderChart = () => {
-    if (layout.chartType === 'bar') {
-      return (
-        <BarChart data={layout.data} margin={{ top: 14, right: 18, bottom: 10, left: -12 }}>
-          <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" vertical={false} />
-          <XAxis dataKey={layout.xAxisKey} stroke="#64748b" fontSize={11} tickLine={false} tickFormatter={formatFieldName} />
-          <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
-          <Tooltip contentStyle={{ background: '#111827', border: '0', borderRadius: 14, color: '#fff', fontSize: 12 }} />
-          <Bar dataKey={layout.yAxisKey || 'value'} radius={[10, 10, 3, 3]} barSize={34}>
-            {layout.data.map((_, index) => (
-              <Cell key={`bar-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-            ))}
-          </Bar>
-        </BarChart>
-      );
-    }
-
-    if (layout.chartType === 'line') {
-      return (
-        <LineChart data={layout.data} margin={{ top: 14, right: 18, bottom: 10, left: -12 }}>
-          <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" vertical={false} />
-          <XAxis dataKey={layout.xAxisKey} stroke="#64748b" fontSize={11} tickLine={false} tickFormatter={formatFieldName} />
-          <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
-          <Tooltip contentStyle={{ background: '#111827', border: '0', borderRadius: 14, color: '#fff', fontSize: 12 }} />
-          <Line type="monotone" dataKey={layout.yAxisKey || 'value'} stroke="#fb4d55" strokeWidth={3} dot={{ r: 4, fill: '#fb4d55' }} />
-        </LineChart>
-      );
-    }
-
-    if (layout.chartType === 'scatter') {
-      return (
-        <ScatterChart margin={{ top: 14, right: 18, bottom: 10, left: -12 }}>
-          <CartesianGrid stroke="#e5e7eb" strokeDasharray="4 4" />
-          <XAxis type="number" dataKey={layout.xAxisKey} name={layout.xAxisKey} stroke="#64748b" fontSize={11} tickLine={false} />
-          <YAxis type="number" dataKey={layout.yAxisKey} name={layout.yAxisKey} stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
-          <ZAxis type="number" range={[54, 54]} />
-          <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ background: '#111827', border: '0', borderRadius: 14, color: '#fff', fontSize: 12 }} />
-          <Scatter name="Data" data={layout.data} fill="#2f80ed" />
-        </ScatterChart>
-      );
-    }
-
-    if (layout.chartType === 'pie') {
-      return (
-        <PieChart>
-          <Pie
-            data={layout.data}
-            cx="50%"
-            cy="50%"
-            innerRadius={58}
-            outerRadius={82}
-            paddingAngle={4}
-            dataKey={layout.yAxisKey || 'value'}
-            nameKey={layout.xAxisKey || 'label'}
-          >
-            {layout.data.map((_, index) => (
-              <Cell key={`pie-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip contentStyle={{ background: '#111827', border: '0', borderRadius: 14, color: '#fff', fontSize: 12 }} />
-        </PieChart>
-      );
-    }
-
-    return null;
-  };
 
   if (hasNoData) {
     return (
-      <div className="rounded-[30px] border border-white/70 bg-[#f7f2ea] p-6 text-slate-950 shadow-[0_24px_70px_rgba(0,0,0,0.28)]">
-        <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/75 p-10 text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl bg-rose-100 text-rose-500">
-            <Database size={24} />
+      <div className="flex flex-col gap-6 w-full">
+        {/* 1. Narrative Card */}
+        <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/30 backdrop-blur-md">
+          <SimpleMarkdown text={displayNarrative || "No records matched your specific filters."} />
+          <div className="mt-3 pt-2 border-t border-zinc-800/40 flex items-center justify-between">
+            <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
+              Computed by: New Analytics Engine
+            </div>
           </div>
-          <h3 className="mt-5 text-xl font-black tracking-tight">No matching records found</h3>
-          <div className="mx-auto mt-3 max-w-xl">
-            <NarrativeText text={narrative || 'The query ran locally, but no rows matched the current criteria.'} tone="light" />
+        </div>
+
+        {/* 2. Empty State Banner */}
+        <div className="p-8 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center flex flex-col items-center justify-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 text-lg">
+            🔍
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-200">No matching records found</h3>
+            <p className="text-xs text-zinc-500 max-w-sm mt-1 mx-auto leading-relaxed">
+              The query executed successfully on the local SQLite engine, but the active database query returned zero rows. Try broadening your criteria or selecting another schema field.
+            </p>
           </div>
         </div>
       </div>
     );
   }
 
-  const tableKeys = Object.keys(rows[0] || {}).filter((key) => key !== 'key' && key !== 'id');
+  // Compile a perfect 4-column KPI cards list just like Power BI!
+  const displayKpis = [...layout.kpis];
+  
+  if (displayKpis.length < 4) {
+    const recordCount = result.data?.rows?.length || 0;
+    displayKpis.push({
+      label: 'ROWS RETURNED',
+      value: recordCount.toLocaleString(),
+      subText: 'SQLite query output rows',
+      color: '#ef4444', // Red/Coral theme color
+    });
+  }
+  
+  if (displayKpis.length < 4) {
+    displayKpis.push({
+      label: 'LOCAL SECURITY',
+      value: 'SQLite Sandbox',
+      subText: '100% private in-browser',
+      color: '#10b981', // Emerald green security color
+    });
+  }
 
   return (
-    <div className="w-full rounded-[32px] border border-white/70 bg-[#f7f2ea] p-4 text-slate-950 shadow-[0_24px_80px_rgba(0,0,0,0.32)] md:p-6">
-      <div className="grid gap-5 2xl:grid-cols-[1.05fr_0.95fr]">
-        <section className="relative overflow-hidden rounded-[28px] bg-[#111827] p-5 text-white shadow-[0_18px_55px_rgba(15,23,42,0.22)]">
-          <div className="absolute -right-20 -top-24 h-56 w-56 rounded-full bg-rose-500/30 blur-3xl" />
-          <div className="absolute -bottom-24 left-12 h-52 w-52 rounded-full bg-cyan-400/20 blur-3xl" />
-          <div className="relative">
+    <div className="flex flex-col gap-4 w-full">
+      <div
+        className="rounded-2xl border border-red-500/15 bg-[radial-gradient(circle_at_top_left,rgba(239,68,68,0.12),transparent_34%),linear-gradient(135deg,rgba(18,18,24,0.96),rgba(8,4,5,0.98))] p-4 shadow-2xl"
+        style={{ boxShadow: '0 18px 50px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.03)' }}
+      >
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">
+              <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-300">
                 New Analytics Engine
               </span>
-              <span className="rounded-full bg-rose-400/20 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-rose-100">
-                {isPartial ? 'Partial Result' : 'Computed Result'}
+              <span className="rounded-full border border-red-400/20 bg-red-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-red-300">
+                {isPartial ? 'Partial With Caveats' : 'Computed Result'}
               </span>
             </div>
-            <h2 className="mt-5 max-w-2xl text-2xl font-black leading-[0.98] tracking-tight md:text-3xl">
-              {boardTitle}
+            <h2 className="mt-3 text-xl font-black leading-tight tracking-tight text-zinc-50">
+              {formatFieldName(result.plan.intent)} Dashboard
             </h2>
-            <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-300">
+            <p className="mt-1 max-w-3xl truncate text-xs text-zinc-400">
               {question}
             </p>
           </div>
-        </section>
-
-        <section className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-[24px] border border-white/80 bg-white p-4 shadow-[0_12px_35px_rgba(15,23,42,0.08)]">
-            <div className="flex items-center justify-between">
-              <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Rows Used</div>
-              <Rows3 size={18} className="text-rose-500" />
+          <div className="grid grid-cols-2 gap-2 text-right text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+            <div className="rounded-xl border border-zinc-800/80 bg-black/20 px-3 py-2">
+              <div className="font-bold text-zinc-400">Rows Used</div>
+              <div className="mt-1 text-sm font-black text-zinc-100">{(result.data?.rows?.length || 0).toLocaleString()}</div>
             </div>
-            <div className="mt-3 text-3xl font-black tracking-tight text-slate-950">{rows.length.toLocaleString()}</div>
-            <div className="mt-1 text-xs font-semibold text-slate-500">Returned from the local executor</div>
-          </div>
-          <div className="rounded-[24px] border border-emerald-100 bg-emerald-50 p-4 shadow-[0_12px_35px_rgba(15,23,42,0.08)]">
-            <div className="flex items-center justify-between">
-              <div className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-600">Local Security</div>
-              <LockKeyhole size={18} className="text-emerald-600" />
+            <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/5 px-3 py-2">
+              <div className="font-bold text-emerald-300/80">Privacy</div>
+              <div className="mt-1 text-sm font-black text-emerald-300">Local</div>
             </div>
-            <div className="mt-3 text-2xl font-black tracking-tight text-emerald-700">SQLite Sandbox</div>
-            <div className="mt-1 text-xs font-semibold text-emerald-700/70">Private in-browser execution</div>
           </div>
-        </section>
+        </div>
       </div>
-
-      <section className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4">
-        {displayKpis.map((kpi, index) => (
-          <MetricTile key={`${kpi.label}-${index}`} kpi={kpi} index={index} />
-        ))}
-      </section>
-
-      <section className="mt-5 grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
-        <div className="rounded-[28px] border border-white/80 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.10)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-rose-500">
-                <BarChart3 size={15} />
-                Primary Visual
+      
+      {/* ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+         ROW 1: POWER BI-STYLE KPI ROW (Always perfect 4 cards grid)
+         ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        {displayKpis.map((kpi, idx) => (
+          <div 
+            key={idx}
+            className="p-3.5 rounded-2xl border bg-gradient-to-br from-[#12121a] via-[#0d0d12] to-[#080405] relative overflow-hidden group shadow-lg flex flex-col justify-between"
+            style={{ 
+              borderColor: kpi.color ? `${kpi.color}25` : '#1f1f23',
+              boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.01), 0 4px 12px rgba(0, 0, 0, 0.3)'
+            }}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                {kpi.label}
+              </span>
+              <div 
+                className="w-5 h-5 rounded-md flex items-center justify-center border"
+                style={{ 
+                  backgroundColor: kpi.color ? `${kpi.color}0c` : 'rgba(255,255,255,0.02)',
+                  borderColor: kpi.color ? `${kpi.color}1c` : '#27272a'
+                }}
+              >
+                {getKpiIcon(kpi.label)}
               </div>
-              <h3 className="mt-2 text-lg font-black tracking-tight text-slate-950">
-                {formatChartTitle(layout.title)}
-              </h3>
             </div>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
-              {layout.chartType}
-            </span>
-          </div>
-          <div className="mt-5 h-[320px] w-full">
-            {layout.chartType !== 'none' && layout.data.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                {renderChart()}
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center rounded-[22px] border border-dashed border-slate-200 bg-slate-50 text-center">
-                <Database size={28} className="text-slate-400" />
-                <div className="mt-3 text-sm font-black text-slate-700">Table result</div>
-                <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">This query is best represented as rows rather than a chart.</p>
+            
+            <div 
+              className="text-xl font-black truncate leading-tight tracking-tight my-0.5"
+              style={{ color: kpi.color || '#f4f4f5', textShadow: kpi.color ? `0 0 10px ${kpi.color}15` : 'none' }}
+            >
+              {formatKpiValue(kpi.value)}
+            </div>
+            
+            {kpi.subText && (
+              <div className="text-[10px] text-zinc-500 font-medium truncate mt-1">
+                {kpi.subText}
               </div>
             )}
           </div>
-        </div>
+        ))}
+      </div>
 
-        <aside className="rounded-[28px] bg-[#17111a] p-5 text-white shadow-[0_18px_55px_rgba(15,23,42,0.16)]">
-          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-rose-300">
-            <Sparkles size={15} />
-            Interpretation
-          </div>
-          <div className="mt-5">
-            <NarrativeText text={narrative} />
-          </div>
-          <div className="mt-6 rounded-[20px] border border-white/10 bg-white/[0.04] p-4">
-            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Computed By</div>
-            <div className="mt-2 text-sm font-black text-emerald-300">New Analytics Engine</div>
-            <div className="mt-1 text-xs leading-5 text-slate-400">No legacy fallback text. No cloud data transfer.</div>
-          </div>
-        </aside>
-      </section>
-
-      {tableKeys.length > 0 && (
-        <section className="mt-5 rounded-[28px] border border-white/80 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.10)]">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-            <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
-              <Database size={15} />
-              Result Datagrid
+      {/* ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+         ROW 2: TWO-COLUMN DASHBOARD CANVAS (Left Chart, Right Explanation)
+         ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-3">
+        {/* LEFT COLUMN: Premium Chart Panel (Takes 3 columns / 60% width) */}
+        {layout.chartType !== 'none' && layout.data.length > 0 ? (
+          <div className="xl:col-span-3 p-4 rounded-2xl border border-zinc-800/80 bg-[linear-gradient(145deg,rgba(12,12,18,0.94),rgba(4,4,7,0.98))] shadow-lg flex flex-col justify-between">
+            <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2 mb-3">
+              <div className="text-xs font-bold text-zinc-300 flex items-center gap-1.5 uppercase tracking-wide">
+                <TrendingUp size={13} className="text-red-400" />
+                <span>{formatPanelTitle(layout.title)}</span>
+              </div>
+              <span className="text-[9px] font-mono text-zinc-500 uppercase px-1.5 py-0.5 rounded border border-zinc-800 bg-zinc-900/60">
+                {layout.chartType}
+              </span>
             </div>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-bold text-slate-500">
-              Showing {Math.min(rows.length, 6)} of {rows.length}
-            </span>
-          </div>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[620px] border-collapse text-left text-xs">
-              <thead>
-                <tr className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">
-                  {tableKeys.map((key) => (
-                    <th key={key} className="px-3 py-3">{formatFieldName(key)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.slice(0, 6).map((row, rowIndex) => (
-                  <tr key={rowIndex} className="border-t border-slate-100 text-slate-700">
-                    {tableKeys.map((key) => {
-                      const value = row[key];
-                      const isNumeric = typeof value === 'number';
-                      return (
-                        <td key={key} className="px-3 py-3 font-semibold">
-                          <span className={isNumeric ? 'text-blue-600' : 'text-slate-800'}>
-                            {isNumeric ? formatNumber(value) : String(value ?? '-')}
-                          </span>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
 
-      {isPartial && reasons.length > 0 && (
-        <section className="mt-5 rounded-[24px] border border-amber-200 bg-amber-50 p-4 text-amber-950">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 shrink-0 text-amber-600" size={18} />
+            <div className="h-56 w-full my-1">
+              <ResponsiveContainer width="100%" height="100%">
+                {layout.chartType === 'bar' ? (
+                  <BarChart data={layout.data} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1f1f23" vertical={false} />
+                    <XAxis 
+                      dataKey={layout.xAxisKey} 
+                      stroke="#52525b" 
+                      fontSize={9}
+                      tickLine={false}
+                      tickFormatter={formatFieldName}
+                    />
+                    <YAxis 
+                      stroke="#52525b" 
+                      fontSize={9}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip 
+                      contentStyle={{ background: '#0e0e12', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '8px' }}
+                      labelStyle={{ color: '#a1a1aa', fontWeight: 600 }}
+                    />
+                    <Bar 
+                      dataKey={layout.yAxisKey || 'value'} 
+                      fill="#ef4444" 
+                      radius={[4, 4, 0, 0]}
+                      barSize={20}
+                    >
+                      {layout.data.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={POWER_BI_COLORS[index % POWER_BI_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                ) : layout.chartType === 'line' ? (
+                  <LineChart data={layout.data} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1f1f23" vertical={false} />
+                    <XAxis 
+                      dataKey={layout.xAxisKey} 
+                      stroke="#52525b" 
+                      fontSize={9}
+                      tickLine={false}
+                      tickFormatter={formatFieldName}
+                    />
+                    <YAxis 
+                      stroke="#52525b" 
+                      fontSize={9}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip 
+                      contentStyle={{ background: '#0e0e12', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '8px' }}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey={layout.yAxisKey || 'value'} 
+                      stroke="#ef4444" 
+                      strokeWidth={2}
+                      dot={{ stroke: '#ef4444', strokeWidth: 1.5, r: 3, fill: '#080405' }}
+                    />
+                  </LineChart>
+                ) : layout.chartType === 'scatter' ? (
+                  <ScatterChart margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
+                    <CartesianGrid stroke="#1f1f23" strokeDasharray="3 3" />
+                    <XAxis 
+                      type="number" 
+                      dataKey={layout.xAxisKey} 
+                      name={layout.xAxisKey} 
+                      stroke="#52525b" 
+                      fontSize={9}
+                      tickLine={false}
+                    />
+                    <YAxis 
+                      type="number" 
+                      dataKey={layout.yAxisKey} 
+                      name={layout.yAxisKey} 
+                      stroke="#52525b" 
+                      fontSize={9}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <ZAxis type="number" range={[50, 50]} />
+                    <Tooltip 
+                      cursor={{ strokeDasharray: '3 3' }}
+                      contentStyle={{ background: '#0e0e12', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '8px' }}
+                    />
+                    <Scatter name="Data" data={layout.data} fill="#3b82f6" />
+                  </ScatterChart>
+                ) : layout.chartType === 'pie' ? (
+                  <PieChart>
+                    <Pie
+                      data={layout.data}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={45}
+                      outerRadius={65}
+                      paddingAngle={3}
+                      dataKey={layout.yAxisKey || 'value'}
+                      nameKey={layout.xAxisKey || 'label'}
+                    >
+                      {layout.data.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={POWER_BI_COLORS[index % POWER_BI_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ background: '#0e0e12', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '8px' }}
+                    />
+                  </PieChart>
+                ) : null}
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : (
+          <div className="xl:col-span-3 p-5 rounded-xl border border-zinc-800/80 bg-zinc-950/40 flex flex-col justify-center items-center text-center shadow-lg min-h-[220px]">
+            <Server size={22} className="text-zinc-600 mb-2" />
+            <span className="text-xs font-semibold text-zinc-400">Data Table Visualization</span>
+            <p className="text-[10px] text-zinc-600 mt-1 max-w-[240px]">
+              This query type maps directly to a relational grid preview. Check the raw dataset table below.
+            </p>
+          </div>
+        )}
+
+        {/* RIGHT COLUMN: AI Narrative Card & Local Security Badges (Takes 2 columns / 40% width) */}
+        <div className="xl:col-span-2 flex flex-col gap-3">
+          {/* A. Narrative / AI Explanation */}
+          <div 
+            className="p-4 rounded-2xl border shadow-lg flex-1 flex flex-col justify-between"
+            style={{ 
+              background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.04) 0%, rgba(139, 92, 246, 0.02) 100%)',
+              borderColor: 'rgba(239, 68, 68, 0.16)'
+            }}
+          >
             <div>
-              <div className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-700">Precision Caveat</div>
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-xs font-semibold leading-5 text-amber-900/80">
-                {reasons.map((reason: string, index: number) => (
-                  <li key={index}>{reason}</li>
+              <div className="flex items-center gap-1.5 mb-2.5">
+                <span className="text-[9px] font-black bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                  AI Interpretation
+                </span>
+              </div>
+              <SimpleMarkdown text={displayNarrative} />
+            </div>
+
+            <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mt-3 pt-2 border-t border-zinc-800/30 flex items-center justify-between">
+              <span>ACTIVE COCKPIT NODE</span>
+              <span className="text-red-400">SECURE SHELL</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+         ROW 3: DETAILED TABULAR DATA PREVIEW (DuckDB Datagrid)
+         ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  */}
+      {result.data?.rows && result.data.rows.length > 0 && (() => {
+        const rows = result.data.rows;
+        // Strip out Recharts auto key columns
+        const keys = Object.keys(rows[0] || {}).filter(k => k !== 'key' && k !== 'id');
+        return (
+          <div className="p-3.5 rounded-2xl border border-zinc-800/80 bg-[linear-gradient(180deg,rgba(12,12,18,0.9),rgba(4,4,7,0.96))] shadow-lg flex flex-col gap-2">
+            <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                <Database size={11} className="text-zinc-400" />
+                <span>Local Relational Datagrid Output</span>
+              </span>
+              <span className="text-[9px] bg-zinc-900 text-zinc-500 border border-zinc-800/60 px-1.5 py-0.5 rounded font-mono">
+                Showing top {Math.min(rows.length, 6)} rows of {rows.length} total
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-[10px] text-zinc-300 font-mono">
+                <thead>
+                  <tr className="border-b border-zinc-800 text-zinc-400 font-semibold bg-zinc-900/30">
+                    {keys.map(k => (
+                      <th key={k} className="p-1.5 truncate tracking-wide">{formatFieldName(k)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 6).map((row, rIdx) => (
+                    <tr key={rIdx} className="border-b border-zinc-800/30 hover:bg-zinc-900/10">
+                      {keys.map(k => {
+                        const val = row[k];
+                        const isNumeric = typeof val === 'number';
+                        return (
+                          <td 
+                            key={k} 
+                            className="p-1.5 max-w-[150px] truncate"
+                            style={{ color: isNumeric ? '#3b82f6' : '#e4e4e7' }}
+                          >
+                            {isNumeric ? (Number.isInteger(val) ? val.toLocaleString() : val.toFixed(2)) : String(val ?? '-')}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+         ROW 4: CAUTION / PRIVACY INTERCEPTORS (If partial group suppression active)
+         ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  */}
+      {isPartial && reasons.length > 0 && (
+        <div 
+          className="p-3 rounded-xl border border-amber-500/20 bg-amber-950/10 shrink-0"
+          style={{
+            background: 'rgba(245, 158, 11, 0.01)',
+            borderColor: 'rgba(245, 158, 11, 0.12)',
+          }}
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={13} />
+            <div>
+              <div className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-0.5">
+                Privacy / Precision Caveat
+              </div>
+              <ul className="list-disc pl-4 text-[10px] text-zinc-400 space-y-0.5">
+                {reasons.map((r: string, idx: number) => (
+                  <li key={idx}>{r}</li>
                 ))}
               </ul>
             </div>
           </div>
-        </section>
+        </div>
       )}
     </div>
   );

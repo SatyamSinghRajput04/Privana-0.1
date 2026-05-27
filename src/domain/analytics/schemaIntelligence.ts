@@ -7,6 +7,26 @@ import { ColumnResolver } from '../resolver/resolver';
 import { DatasetProfile } from '../types/dataset';
 import { ColumnMatch, ColumnRole, AnalysisIntent } from './types';
 
+function getLevenshteinDistance(a: string, b: string): number {
+  const tmp: number[][] = [];
+  for (let i = 0; i <= a.length; i++) {
+    tmp[i] = [i];
+  }
+  for (let j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1,
+        tmp[i][j - 1] + 1,
+        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return tmp[a.length][b.length];
+}
+
 export const SchemaIntelligence = {
   /**
    * Resolves a raw user phrase to a matching column in the dataset profile,
@@ -17,6 +37,30 @@ export const SchemaIntelligence = {
 
     const match = ColumnResolver.resolve(phrase, profile);
     if (!match) return null;
+
+    // Gate fuzzy matches
+    if (match.strategy === 'fuzzy') {
+      const tClean = phrase.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      const colClean = match.columnName.toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+      // Allow if the term is a direct prefix of the column name (e.g. "anxiety" → "anxiety_level")
+      // This handles the very common {term}_{suffix} column naming pattern.
+      const isDirectPrefix = colClean === tClean || colClean.startsWith(tClean + '_');
+      if (isDirectPrefix) {
+        // Direct prefix: allow with full confidence
+      } else {
+        const tTokens = tClean.split(/[\s_]+/);
+        const colTokens = colClean.split(/[\s_]+/);
+        const prefixMatch = tTokens[0].startsWith(colTokens[0].slice(0, 3)) || colTokens[0].startsWith(tTokens[0].slice(0, 3));
+
+        const dist = getLevenshteinDistance(tClean, colClean);
+        const maxDist = Math.max(1, Math.floor(tClean.length / 5));
+
+        if (dist > maxDist || !prefixMatch) {
+          return null; // Reject fuzzy matches that are too distant or prefix-mismatched
+        }
+      }
+    }
 
     // Infer default role based on column type
     let role: ColumnRole = 'metric';
@@ -37,6 +81,37 @@ export const SchemaIntelligence = {
       confidence: match.confidence,
       role,
     };
+  },
+
+  /**
+   * Generates similar column suggestions for a missing term.
+   */
+  getSimilarColumns(missingTerm: string, profile: DatasetProfile): string[] {
+    if (!profile || !profile.columns) return [];
+    const cleanTerm = missingTerm.toLowerCase().replace(/[^a-z0-9_]/g, '');
+    const suggestions: string[] = [];
+
+    for (const col of profile.columns) {
+      const colName = col.name;
+      const cleanCol = colName.toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+      // 1. Calculate edit distance
+      const dist = getLevenshteinDistance(cleanTerm, cleanCol);
+      if (dist <= 6) {
+        suggestions.push(colName);
+        continue;
+      }
+
+      // 2. Common suffixes check (e.g. both end in _level or _label or _hours)
+      const suffixes = ['_level', '_label', '_hours', '_time', '_sleep'];
+      const matchingSuffix = suffixes.find(s => cleanTerm.endsWith(s.replace('_', '')) || cleanTerm.endsWith(s));
+      if (matchingSuffix && (cleanCol.endsWith(matchingSuffix.replace('_', '')) || cleanCol.endsWith(matchingSuffix))) {
+        suggestions.push(colName);
+        continue;
+      }
+    }
+
+    return Array.from(new Set(suggestions)).slice(0, 3);
   },
 
   /**

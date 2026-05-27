@@ -8,7 +8,8 @@ import { IntentPlanner } from './intentPlanner';
 import { SlotResolver } from './slotResolver';
 import { PlanValidator } from './planValidator';
 import { SchemaIntelligence } from './schemaIntelligence';
-import { AnalyticsResult, AnalysisPlan, ExecutorResult, ChartSpec, ClarificationChoice } from './types';
+import { SemanticResolver } from './semanticResolver';
+import { AnalyticsResult, AnalysisPlan, ExecutorResult, ChartSpec, ClarificationChoice, SUPPORTED_INTENTS } from './types';
 
 // Executors
 import { SummaryExecutor } from './executors/summary';
@@ -53,6 +54,22 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
   }
 
   try {
+    // 1.5 Advanced Unsupported Intent Check (Layer A)
+    const qLower = question.toLowerCase();
+    const advancedKeywords = [
+      'logistic regression', 'clustering', 'cluster', 'anomaly detection', 'anomalies',
+      'heatmap', 'correlation matrix', 'probability prediction', 'actionable insights'
+    ];
+    const matchedKeyword = advancedKeywords.find(kw => qLower.includes(kw));
+    if (matchedKeyword) {
+      return {
+        status: 'unsupported',
+        explanation: `Privana does not support ${matchedKeyword} in this MVP yet. I can compute feature importance, correlations, distributions, rankings, and grouped averages.`,
+        suggestedQuestions: SchemaIntelligence.suggestQuestions(profile),
+        provenance: buildProvenance(),
+      };
+    }
+
     // 2. Classify Intent (Layer 1)
     const plannedIntent = IntentPlanner.plan(question, profile);
 
@@ -71,9 +88,38 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       source: 'pattern',
     };
 
+    // 4.5 Validate resolved intent is in SUPPORTED_INTENTS (Layer B allowlist enforcement)
+    if (!SUPPORTED_INTENTS.includes(plan.intent)) {
+      return {
+        status: 'unsupported',
+        explanation: `I couldn't identify a supported query format for "${question}". Try asking about distributions, averages, or correlations.`,
+        suggestedQuestions: SchemaIntelligence.suggestQuestions(profile),
+        provenance: buildProvenance(),
+      };
+    }
+
     // 5. Validate Plan Schema
     const validationErrors = PlanValidator.validate(plan, profile);
     if (validationErrors.length > 0) {
+      const missingColumns = SemanticResolver.findMissingColumns(question, profile);
+      if (missingColumns.length > 0) {
+        const allSuggestions: string[] = [];
+        for (const missingCol of missingColumns) {
+          const colSugs = SchemaIntelligence.getSimilarColumns(missingCol, profile);
+          allSuggestions.push(...colSugs);
+        }
+        const uniqueSuggestions = Array.from(new Set(allSuggestions));
+
+        return {
+          status: 'refused',
+          errors: validationErrors,
+          reason: 'missing_column',
+          missing: missingColumns,
+          message: `Missing column: ${missingColumns.join(', ')}. This column is not present in the loaded dataset.`,
+          suggestions: uniqueSuggestions,
+          provenance: buildProvenance(),
+        };
+      }
       return {
         status: 'refused',
         errors: validationErrors,

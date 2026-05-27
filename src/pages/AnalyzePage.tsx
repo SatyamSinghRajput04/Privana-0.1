@@ -268,7 +268,9 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   // --- AI Q&A ASSISTANT STATE ---
   const [qaInput, setQaInput] = useState('');
   const [qaLoading, setQaLoading] = useState(false);
-  const [qaResponse, setQaResponse] = useState<string | null>(null);
+  const [qaResponse, setQaResponse] = useState<any | null>(null);
+  const [analyticsPipelineEnabled, setAnalyticsPipelineEnabled] = useState(() => isFlagOn('USE_NEW_ANALYTICS_PIPELINE'));
+  const isDev = typeof process !== 'undefined' ? process.env?.NODE_ENV !== 'production' : ((import.meta as any).env?.DEV ?? true);
 
   // --- CONTEXTUAL VISUALIZATION STATE ---
   type AnalyticalContext = {
@@ -359,6 +361,19 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
 
   const suggestedCards = useMemo(() => {
     if (!selectedDataset || !columnsList.length) return [];
+
+    if (analyticsPipelineEnabled) {
+      const tableName = selectedDataset.name;
+      const tbl = getSqlTableName(tableName);
+      const rows = executeSQL(`SELECT * FROM ${tbl}`);
+      const profile = DatasetValidator.profile(rows, tableName);
+      const questions = SchemaIntelligence.suggestQuestions(profile);
+      return questions.map((q, idx) => ({
+        title: `💡 Suggested Query ${idx + 1}`,
+        desc: q,
+        query: q
+      }));
+    }
     
     const names = columnsList.map(c => c.name.toLowerCase());
     

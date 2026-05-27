@@ -112,6 +112,10 @@ export type AnalyticsResult =
   | {
       status: 'refused';
       errors: string[];
+      reason?: string;
+      missing?: string[];
+      message?: string;
+      suggestions?: string[];
       provenance: Provenance;
     }
   | {

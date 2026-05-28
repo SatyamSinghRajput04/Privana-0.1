@@ -41,11 +41,200 @@ export function registerTable(tableName: string, data: any[]): void {
   (alasql.tables as any)[name].data = data;
 }
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-// CSV LOADER
+// SPEC V1.1 INGESTION AND SCHEMA CONTRACT
+// ─────────────────────────────────────────────────────────────────────────────
+export interface ColumnSpec {
+  name: string;
+  type: 'number' | 'integer' | 'string' | 'boolean' | 'date' | 'timestamp';
+  nullable: boolean;
+  role: 'dimension' | 'metric' | 'time' | 'id' | 'unknown';
+  cardinality?: number;
+  nullCount: number;
+  originalType?: string;
+  coercedType?: string;
+  coercedExample?: string;
+}
+
+export interface SchemaContract {
+  datasetId: string;
+  versionHash: string; // content-addressed hash of CSV contents
+  columns: ColumnSpec[];
+  rowCount: number;
+  ingestionTimestamp: number;
+}
+
+export const SCHEMA_PROFILES: Record<string, SchemaContract> = {};
+
+function getStringHash(str: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    // Multiply by FNV prime (using bitwise ops for JS integer range)
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+export function normalizeAndProfileData(tableName: string, data: any[], rawContent: string): SchemaContract {
+  const rowCount = data.length;
+  const ingestionTimestamp = Date.now();
+  const datasetId = tableName;
+  const versionHash = getStringHash(rawContent);
+
+  if (rowCount === 0) {
+    const contract: SchemaContract = { datasetId, versionHash, columns: [], rowCount, ingestionTimestamp };
+    Object.freeze(contract);
+    SCHEMA_PROFILES[tableName] = contract;
+    return contract;
+  }
+
+  const columns = Object.keys(data[0]);
+  const colSpecs: ColumnSpec[] = [];
+
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  const dateTimePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+
+  for (const colName of columns) {
+    let nullCount = 0;
+    const values: any[] = [];
+    let originalType = 'string';
+    let coercedType = 'string';
+    let coercedExample = '';
+
+    for (let i = 0; i < rowCount; i++) {
+      let val = data[i][colName];
+
+      // Stage 0 Ingestion: Null Coercion
+      if (val === null || val === undefined || val === '' || (typeof val === 'string' && val.trim() === '')) {
+        data[i][colName] = null;
+        nullCount++;
+        continue;
+      }
+
+      if (typeof val === 'number') {
+        if (isNaN(val) || !isFinite(val)) {
+          data[i][colName] = null;
+          nullCount++;
+          continue;
+        }
+      }
+
+      // Conservative Date Coercion Sniffing
+      if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (datePattern.test(trimmed) || dateTimePattern.test(trimmed)) {
+          try {
+            const d = new Date(trimmed);
+            if (!isNaN(d.getTime())) {
+              const iso = d.toISOString();
+              data[i][colName] = iso;
+              originalType = 'string';
+              coercedType = 'date';
+              coercedExample = trimmed;
+              val = iso;
+            }
+          } catch {
+            // Keep original on parse failure
+          }
+        }
+      }
+
+      values.push(val);
+    }
+
+    const nonNullCount = values.length;
+    let inferredType: ColumnSpec['type'] = 'string';
+    let role: ColumnSpec['role'] = 'unknown';
+
+    if (nonNullCount > 0) {
+      const numbers = values.filter(v => typeof v === 'number');
+      const booleans = values.filter(v => typeof v === 'boolean');
+      const dates = values.filter(v => typeof v === 'string' && (datePattern.test(v) || dateTimePattern.test(v) || v.endsWith('Z')));
+
+      if (numbers.length > nonNullCount * 0.7) {
+        const isAllInt = numbers.every(n => Number.isInteger(n));
+        inferredType = isAllInt ? 'integer' : 'number';
+        role = 'metric';
+      } else if (booleans.length > nonNullCount * 0.7) {
+        inferredType = 'boolean';
+        role = 'dimension';
+      } else if (dates.length > nonNullCount * 0.5 || coercedType === 'date') {
+        inferredType = 'date';
+        role = 'time';
+      } else {
+        inferredType = 'string';
+        role = colName.toLowerCase().includes('id') ? 'id' : 'dimension';
+      }
+    }
+
+    const uniqueValues = new Set(values);
+    const cardinality = uniqueValues.size;
+
+    const spec: ColumnSpec = {
+      name: colName,
+      type: inferredType,
+      nullable: nullCount > 0,
+      role,
+      cardinality: cardinality < 100 ? cardinality : undefined,
+      nullCount,
+      originalType,
+      coercedType: coercedType !== 'string' ? coercedType : undefined,
+      coercedExample: coercedExample || undefined
+    };
+
+    Object.freeze(spec);
+    colSpecs.push(spec);
+  }
+
+  const contract: SchemaContract = {
+    datasetId,
+    versionHash,
+    columns: colSpecs,
+    rowCount,
+    ingestionTimestamp
+  };
+
+  Object.freeze(contract);
+  SCHEMA_PROFILES[tableName] = contract;
+  return contract;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV LOADER (Hardened limits & sanitization)
 // ─────────────────────────────────────────────────────────────────────────────
 export function loadCSV(filename: string, csvContent: string): Promise<any[]> {
   return new Promise((resolve, reject) => {
+    // 1. File size check (100MB cap)
+    const byteSize = new Blob([csvContent]).size;
+    if (byteSize > 100 * 1024 * 1024) {
+      return reject(new Error(`Duplicate and/or overflow Column check failed: File size exceeds the strict cap of 100 MB (size: ${(byteSize / (1024 * 1024)).toFixed(1)} MB).`));
+    }
+
+    // 2. Headers count & uniqueness checks
+    const lines = csvContent.split(/\r?\n/).filter(Boolean);
+    if (lines.length > 0) {
+      const firstLine = lines[0];
+      const parsedHeader = Papa.parse(firstLine).data[0] as string[];
+      if (parsedHeader && parsedHeader.length > 0) {
+        if (parsedHeader.length > 500) {
+          return reject(new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${parsedHeader.length} columns).`));
+        }
+        const seen = new Set<string>();
+        for (const h of parsedHeader) {
+          const cleanH = h?.trim() || '';
+          if (cleanH === '') {
+            return reject(new Error(`Ingestion failed: Found empty column header in CSV.`));
+          }
+          if (seen.has(cleanH)) {
+            return reject(new Error(`Ingestion failed: Duplicate column header name "${cleanH}" detected. Ingestion requires unique headers.`));
+          }
+          seen.add(cleanH);
+        }
+      }
+    }
+
     Papa.parse(csvContent, {
       header: true,
       dynamicTyping: true,
@@ -54,8 +243,27 @@ export function loadCSV(filename: string, csvContent: string): Promise<any[]> {
         if (results.errors.length > 0) {
           console.warn('CSV parsing errors:', results.errors);
         }
-        registerTable(filename, results.data);
-        resolve(results.data);
+
+        // UTF-8 Clean Pass & Replacement of Invalid Character Sentinels
+        const cleanedData = results.data.map((row: any) => {
+          const newRow: any = {};
+          for (const key of Object.keys(row)) {
+            let val = row[key];
+            if (typeof val === 'string') {
+              val = val.replace(/[\uFFFD\u007F-\u009F]/g, '\uFFFD');
+            }
+            newRow[key] = val;
+          }
+          return newRow;
+        });
+
+        try {
+          normalizeAndProfileData(filename, cleanedData, csvContent);
+          registerTable(filename, cleanedData);
+          resolve(cleanedData);
+        } catch (e: any) {
+          reject(e);
+        }
       },
       error: (err: any) => {
         reject(err);
@@ -65,10 +273,15 @@ export function loadCSV(filename: string, csvContent: string): Promise<any[]> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// JSON LOADER  (smart: metadata-aware + nested-array extraction)
+// JSON LOADER (smart: metadata-aware + nested-array extraction)
 // ─────────────────────────────────────────────────────────────────────────────
 export function loadJSON(filename: string, jsonContent: string): any[] {
-  // ── Step 1: Parse ────────────────────────────────────────────────────────
+  // 1. File size check (100MB cap)
+  const byteSize = new Blob([jsonContent]).size;
+  if (byteSize > 100 * 1024 * 1024) {
+    throw new Error(`Ingestion failed: File size exceeds the strict cap of 100 MB (size: ${(byteSize / (1024 * 1024)).toFixed(1)} MB).`);
+  }
+
   let raw: any;
   try {
     raw = JSON.parse(jsonContent);
@@ -76,66 +289,70 @@ export function loadJSON(filename: string, jsonContent: string): any[] {
     throw new Error(`Invalid JSON in "${filename}": ${parseErr.message}`);
   }
 
-  // ── Step 2: Handle top-level arrays directly ──────────────────────────────
+  let finalRows: any[] = [];
   if (Array.isArray(raw)) {
     if (raw.length === 0) {
       throw new Error(`"${filename}" contains an empty JSON array — no records to load.`);
     }
-    registerTable(filename, raw);
-    return raw;
-  }
-
-  // ── Step 3: Object — check for nested data arrays first ──────────────────
-  if (typeof raw === 'object' && raw !== null) {
+    finalRows = raw;
+  } else if (typeof raw === 'object' && raw !== null) {
     const NESTED_KEYS = ['data', 'records', 'rows', 'items', 'results',
                          'features', 'entries', 'dataset', 'values'];
+    let extracted = false;
     for (const key of NESTED_KEYS) {
       const candidate = raw[key];
       if (Array.isArray(candidate) && candidate.length > 0
           && typeof candidate[0] === 'object' && candidate[0] !== null) {
-        console.info(
-          `[loadJSON] "${filename}": extracted nested data array ` +
-          `from key "${key}" (${candidate.length} records).`
-        );
-        registerTable(filename, candidate);
-        return candidate;
+        finalRows = candidate;
+        extracted = true;
+        break;
       }
     }
-
-    // ── Step 4: Metadata/descriptor-file detection ────────────────────────
-    // Files like *-metadata.json contain @context, license, creator, etc.
-    // They are NOT data tables.  Give the user a clear error instead of
-    // creating a 1-row table that contains schema metadata.
-    const METADATA_SIGNALS = [
-      '@context', '@type', 'license', 'creator', 'publisher',
-      'dateModified', 'dateCreated', 'isBasedOn', 'measurementTechnique',
-      'variableMeasured', 'sameAs'
-    ];
-    const foundSignals = METADATA_SIGNALS.filter(k => k in raw);
-    if (foundSignals.length >= 2) {
-      throw new Error(
-        `"${filename}" appears to be a dataset metadata / descriptor file ` +
-        `(detected schema fields: ${foundSignals.slice(0, 4).join(', ')}…). ` +
-        `This file describes the dataset but contains NO actual data rows.\n\n` +
-        `Please upload the real data file — it is usually a .csv or a .json ` +
-        `file that contains the actual records (e.g., one row per respondent).`
-      );
+    if (!extracted) {
+      const METADATA_SIGNALS = [
+        '@context', '@type', 'license', 'creator', 'publisher',
+        'dateModified', 'dateCreated', 'isBasedOn', 'measurementTechnique',
+        'variableMeasured', 'sameAs'
+      ];
+      const foundSignals = METADATA_SIGNALS.filter(k => k in raw);
+      if (foundSignals.length >= 2) {
+        throw new Error(
+          `"${filename}" appears to be a dataset metadata / descriptor file ` +
+          `(detected schema fields: ${foundSignals.slice(0, 4).join(', ')}…). ` +
+          `This file describes the dataset but contains NO actual data rows.\n\n` +
+          `Please upload the real records dataset instead.`
+        );
+      }
+      finalRows = [raw];
     }
-
-    // ── Step 5: Single plain object — wrap as 1-row table (last resort) ───
-    console.warn(
-      `[loadJSON] "${filename}": wrapping single JSON object as 1-row table. ` +
-      `If this is unexpected, upload a JSON array or a CSV file instead.`
-    );
-    const singleRow = [raw];
-    registerTable(filename, singleRow);
-    return singleRow;
+  } else {
+    throw new Error(`"${filename}" is not a valid JSON data file.`);
   }
 
-  throw new Error(
-    `"${filename}" is not a valid JSON data file. Expected a JSON array or ` +
-    `an object with a nested data array.`
-  );
+  // 2. Headers count limit
+  if (finalRows.length > 0) {
+    const keys = Object.keys(finalRows[0]);
+    if (keys.length > 500) {
+      throw new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${keys.length} columns).`);
+    }
+  }
+
+  // UTF-8 Clean Pass
+  const cleanedData = finalRows.map((row: any) => {
+    const newRow: any = {};
+    for (const key of Object.keys(row)) {
+      let val = row[key];
+      if (typeof val === 'string') {
+        val = val.replace(/[\uFFFD\u007F-\u009F]/g, '\uFFFD');
+      }
+      newRow[key] = val;
+    }
+    return newRow;
+  });
+
+  normalizeAndProfileData(filename, cleanedData, jsonContent);
+  registerTable(filename, cleanedData);
+  return cleanedData;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -504,6 +721,12 @@ export function executeSQL(sql: string, params?: any[]): any[] {
     // Strip SQL comments
     let cleaned = sql.replace(/--[^\n]*/g, '').trim();
 
+    // Enforce strict SELECT & WITH compile statement allowed checks §2.3
+    const isSelectOrWith = /^\s*(SELECT|WITH)\b/i.test(cleaned);
+    if (!isSelectOrWith) {
+      throw new Error("Security Violation: Only SELECT and WITH statement types are permitted for execution.");
+    }
+
     // Remove features AlaSQL doesn't support
     cleaned = cleaned
       .replace(/DATE_TRUNC\s*\(\s*'month'\s*,\s*([^)]+)\)/gi, '$1')
@@ -530,4 +753,155 @@ export function executeSQL(sql: string, params?: any[]): any[] {
     console.error('AlaSQL query failed:', err.message);
     throw new Error(`Local SQL execution failed: ${err.message}`);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRUCTURED FILTERS COMPILER
+// ─────────────────────────────────────────────────────────────────────────────
+export interface FilterClause {
+  column: string;
+  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'in' | 'between';
+  value: any;
+  isSuspended?: boolean;
+}
+
+export function compileFiltersToSQL(tableName: string, filters: FilterClause[]): { where: string; params: any[] } {
+  const profile = SCHEMA_PROFILES[tableName];
+  if (!profile) {
+    return { where: '', params: [] };
+  }
+
+  const validCols = new Set(profile.columns.map(c => c.name));
+  const clauses: string[] = [];
+  const params: any[] = [];
+
+  for (const f of filters) {
+    if (f.isSuspended) continue;
+
+    // Safety identifier check: column name MUST be an active schema column! §2.3
+    if (!validCols.has(f.column)) {
+      console.warn(`[SQL Compiler] Blocked unknown column identifier in filter: ${f.column}`);
+      continue;
+    }
+
+    const col = '`' + f.column + '`';
+
+    switch (f.operator) {
+      case 'eq':
+        clauses.push(`${col} = ?`);
+        params.push(f.value);
+        break;
+      case 'neq':
+        clauses.push(`${col} != ?`);
+        params.push(f.value);
+        break;
+      case 'gt':
+        clauses.push(`${col} > ?`);
+        params.push(f.value);
+        break;
+      case 'lt':
+        clauses.push(`${col} < ?`);
+        params.push(f.value);
+        break;
+      case 'gte':
+        clauses.push(`${col} >= ?`);
+        params.push(f.value);
+        break;
+      case 'lte':
+        clauses.push(`${col} <= ?`);
+        params.push(f.value);
+        break;
+      case 'in':
+        if (Array.isArray(f.value) && f.value.length > 0) {
+          // Cap lists to 50 items to avoid stack overflows §6
+          const truncated = f.value.slice(0, 50);
+          const placeholders = truncated.map(() => '?').join(', ');
+          clauses.push(`${col} IN (${placeholders})`);
+          params.push(...truncated);
+        }
+        break;
+      case 'between':
+        if (Array.isArray(f.value) && f.value.length === 2) {
+          clauses.push(`${col} BETWEEN ? AND ?`);
+          params.push(f.value[0], f.value[1]);
+        }
+        break;
+    }
+  }
+
+  const where = clauses.length > 0 ? 'WHERE ' + clauses.join(' AND ') : '';
+  return { where, params };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC V1.1 AGGREGATED LRU CACHE
+// ─────────────────────────────────────────────────────────────────────────────
+interface CacheEntry {
+  key: string;
+  result: any;
+  byteSize: number;
+  timestamp: number;
+}
+
+const cacheMap = new Map<string, CacheEntry>();
+const CACHE_MAX_ENTRIES = 50;
+const CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB
+
+export function clearCache(): void {
+  cacheMap.clear();
+}
+
+export function getCacheKeyHash(
+  datasetId: string,
+  versionHash: string,
+  normalizedSQL: string,
+  orderedParams: any[],
+  filterContextHash: string,
+  querySignature: string
+): string {
+  const rawKey = `${datasetId}:${versionHash}:${normalizedSQL.replace(/\s+/g, ' ').toLowerCase().trim()}:${JSON.stringify(orderedParams)}:${filterContextHash}:${querySignature}`;
+  return getStringHash(rawKey);
+}
+
+export function getCache(key: string): any | null {
+  const entry = cacheMap.get(key);
+  if (entry) {
+    // Evict and re-insert to refresh LRU order
+    cacheMap.delete(key);
+    cacheMap.set(key, entry);
+    return entry.result;
+  }
+  return null;
+}
+
+export function setCache(key: string, result: any, querySignature: string): void {
+  // Caching Constraint: Never cache full datagrid row outputs above 1,000 rows §5.2
+  if (querySignature.includes('tableRows') || (Array.isArray(result) && result.length > 1000)) {
+    return;
+  }
+
+  const strRep = JSON.stringify(result);
+  const byteSize = strRep.length * 2;
+
+  if (byteSize > CACHE_MAX_BYTES / 4) return;
+
+  let totalBytes = Array.from(cacheMap.values()).reduce((sum, e) => sum + e.byteSize, 0);
+
+  // Evict until constraints are satisfied
+  while (cacheMap.size >= CACHE_MAX_ENTRIES || totalBytes + byteSize > CACHE_MAX_BYTES) {
+    const oldestKey = cacheMap.keys().next().value;
+    if (!oldestKey) break;
+    const evicted = cacheMap.get(oldestKey);
+    if (evicted) {
+      totalBytes -= evicted.byteSize;
+    }
+    cacheMap.delete(oldestKey);
+  }
+
+  cacheMap.set(key, {
+    key,
+    result,
+    byteSize,
+    timestamp: Date.now()
+  });
 }

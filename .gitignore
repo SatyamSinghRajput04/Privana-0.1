@@ -4,7 +4,36 @@ dist/
 .env.local
 *.log
 
-# Patch/fix scripts (dev artifacts)
+# ── AI Tool Data (internal — do not publish) ───────────
+.claude/
+.codex/
+.cursor/
+.kiro/
+.cursorrules
+.windsurfrules
+.mcp.json
+.opencode.json
+
+# ── AI-Generated Instruction Files (internal only) ────
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# ── Code Graph Tool (internal database) ───────────────
+.code-review-graph/
+
+# ── Internal Documentation (not for public) ───────────
+RUNTHIS_WIKI.md
+SPEC_V1.1.md
+
+# ── Dev Artifacts ──────────────────────────────────────
+combined_code.txt
+do_commit.bat
+test_output.log
+.vite-source-tags.js
+patch_sidebar.cjs
+
+# ── Patch/fix scripts ──────────────────────────────────
 fix_enc.mjs
 fix_enc2.cjs
 fix_encoding.ps1
@@ -19,8 +48,11 @@ original_block.txt
 replacement_block.txt
 test-alasql.mjs
 
-# Scratch
+# ── Scratch & Backup ───────────────────────────────────
 scratch/
-
-# Backup
 src/pages/AnalyzePage_test.bak
+
+# ── IDE & OS ───────────────────────────────────────────
+.vscode/
+.DS_Store
+Thumbs.db

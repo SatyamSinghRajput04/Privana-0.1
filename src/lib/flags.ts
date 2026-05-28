@@ -1,8 +1,9 @@
 export const FLAGS = {
-  USE_NEW_ANALYTICS_PIPELINE: false,
-  USE_NEW_ANALYTICS_VISUALS:  false,
+  USE_NEW_ANALYTICS_PIPELINE: true,
+  USE_NEW_ANALYTICS_VISUALS:  true,
   USE_LLM_PLAN_PROPOSER:      false,
 } as const;
+
 
 export type FlagName = keyof typeof FLAGS;
 

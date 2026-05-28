@@ -125,3 +125,55 @@ export type AnalyticsResult =
       debugId: string;
       provenance: Provenance;
     };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC V1.1 INVARIANTS: STRUCTURED QUERY & VISUAL CONTRACTS
+// ─────────────────────────────────────────────────────────────────────────────
+export interface StructuredQuery {
+  datasetId: string;
+  table: string;
+  select: string[];
+  where: string;
+  params: any[];
+  limit?: number;
+}
+
+export type GroupedAveragesPayload = { category: string; value: number }[];
+export type CorrelationPayload = { x: number; y: number }[];
+export type TableRowsPayload = any[];
+export type DistributionPayload = { binRange: string; count: number }[];
+
+export type VisualContract =
+  | { kind: 'groupedAverages';   schemaVersion: 1; data: GroupedAveragesPayload; xAxisLabel?: string; yAxisLabel?: string }
+  | { kind: 'correlationSummary';schemaVersion: 1; data: CorrelationPayload; rValue: number; pValue: number; trendSlope: number; xAxisLabel?: string; yAxisLabel?: string }
+  | { kind: 'tableRows';         schemaVersion: 1; data: TableRowsPayload; columns: string[] }
+  | { kind: 'distributionBins';  schemaVersion: 1; data: DistributionPayload; metricName: string; xAxisLabel?: string; yAxisLabel?: string };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC V2.0 WORKSPACE ENGINE: WORKSPACE BLUEPRINT & CARD SPECIFICATION
+// ─────────────────────────────────────────────────────────────────────────────
+export type CardSpec =
+  | { kind: 'groupedAverage'; metricColumn: string; groupColumn: string; aggType: 'avg' | 'sum' | 'count'; }
+  | { kind: 'correlation'; xColumn: string; yColumn: string; }
+  | { kind: 'distribution'; metricColumn: string; binCount: number; }
+  | { kind: 'ranking'; metricColumn: string; categoryColumn: string; limit: number; sort: 'asc' | 'desc'; };
+
+export interface CardDefinition {
+  id: string;
+  title: string;
+  chartType: 'bar' | 'line' | 'scatter' | 'table' | 'kpi';
+  spec: CardSpec;
+}
+
+export interface SheetSpec {
+  id: string;
+  name: string;
+  cards: CardDefinition[];
+}
+
+export interface WorkspaceBlueprint {
+  activeQuestion: string;
+  datasetId: string;
+  versionHash: string;
+  sheets: SheetSpec[];
+}

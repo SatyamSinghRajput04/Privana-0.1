@@ -3,7 +3,7 @@
 // S10 RESULT-TO-VISUAL MAPPING — Maps AnalyticsResult to Chart/Visual metadata.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { AnalyticsResult } from './types';
+import { AnalyticsResult, VisualContract } from './types';
 
 export interface VisualLayout {
   chartType: 'bar' | 'scatter' | 'line' | 'pie' | 'histogram' | 'none';
@@ -138,3 +138,84 @@ export const ResultToVisualContext = {
     };
   }
 };
+
+/**
+ * SPEC V1.1 DISCRIMINATED VISUAL CONTRACT ADAPTER §1.2
+ */
+export function mapToVisualContract(result: AnalyticsResult): VisualContract {
+  if (result.status !== 'computed' && result.status !== 'partial') {
+    return { kind: 'tableRows', schemaVersion: 1, data: [], columns: [] };
+  }
+
+  const { data, plan } = result;
+  const rawRows = data?.rows || [];
+
+  switch (plan.intent) {
+    case 'grouped_average': {
+      const payload = rawRows.map(r => ({
+        category: String(r.category_label || r.group_label || Object.values(r)[0] || ''),
+        value: Number(r.average_value || r.mean || r.avg || Object.values(r)[1] || 0)
+      }));
+      return {
+        kind: 'groupedAverages',
+        schemaVersion: 1,
+        data: payload,
+        xAxisLabel: plan.groupBy?.[0] || 'Category',
+        yAxisLabel: `Average of ${plan.metric || 'Value'}`
+      };
+    }
+
+    case 'correlation': {
+      const stats = rawRows[0] || {};
+      const points = stats.points || [];
+      const payload = points.map((p: any) => ({
+        x: Number(p.x),
+        y: Number(p.y)
+      }));
+
+      // Single-row / Empty boundary protections §1.4
+      const pVal = typeof stats.pValue === 'number' ? stats.pValue : 1.0;
+      const rVal = typeof stats.r === 'number' ? stats.r : 0.0;
+      const slope = typeof stats.slope === 'number' ? stats.slope : 0.0;
+
+      return {
+        kind: 'correlationSummary',
+        schemaVersion: 1,
+        data: payload,
+        rValue: rVal,
+        pValue: pVal,
+        trendSlope: slope,
+        xAxisLabel: plan.metric || 'Variable X',
+        yAxisLabel: plan.target || 'Variable Y'
+      };
+    }
+
+    case 'distribution': {
+      const payload = rawRows.map(r => ({
+        binRange: String(r.binRange || r.bin_label || Object.values(r)[0] || ''),
+        count: Number(r.count || Object.values(r)[1] || 0)
+      }));
+      return {
+        kind: 'distributionBins',
+        schemaVersion: 1,
+        data: payload,
+        metricName: plan.metric || 'Metric',
+        xAxisLabel: plan.metric || 'Range',
+        yAxisLabel: 'Count'
+      };
+    }
+
+    case 'filter':
+    case 'ranking':
+    case 'summary':
+    default: {
+      const cols = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
+      return {
+        kind: 'tableRows',
+        schemaVersion: 1,
+        data: rawRows,
+        columns: cols
+      };
+    }
+  }
+}

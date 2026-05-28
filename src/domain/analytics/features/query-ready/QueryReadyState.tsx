@@ -1,3 +1,5 @@
+import React from 'react';
+import { motion, Variants } from 'framer-motion';
 import { Sparkles, Database, Layers, Shield, Lock, Fingerprint } from 'lucide-react';
 
 interface ColumnInfo {
@@ -28,398 +30,232 @@ export function QueryReadyState({
   onSelectField,
   onSelectQuestion
 }: QueryReadyStateProps) {
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '0.85rem',
-      flex: 1,
-      minHeight: 0,
-      overflowY: 'auto',
-      padding: '0 0.15rem'
-    }}>
-      {/* 1. WELCOME COCKPIT PANEL (Black glass with glowing micro-borders and red/coral accents) */}
-      <div style={{
-        background: 'linear-gradient(135deg, #0e0e12 0%, #080405 100%)',
-        border: '1.5px solid #1f1f23',
-        borderRadius: '16px',
-        padding: '1.25rem 1.5rem',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '1.25rem',
-        boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.01), 0 4px 20px rgba(0, 0, 0, 0.45)',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-        {/* Glow effect in background */}
-        <div style={{
-          position: 'absolute',
-          top: '-50px',
-          left: '-50px',
-          width: '150px',
-          height: '150px',
-          background: 'radial-gradient(circle, rgba(239, 68, 68, 0.04) 0%, transparent 70%)',
-          borderRadius: '50%',
-          pointerEvents: 'none'
-        }} />
+  // Animation container variants for cascading mount
+  const containerVariants = {
+    hidden: {},
+    show: {
+      transition: {
+        staggerChildren: 0.04
+      }
+    }
+  };
 
-        <div style={{
-          width: '46px',
-          height: '46px',
-          borderRadius: '12px',
-          background: 'rgba(239, 68, 68, 0.05)',
-          border: '1.5px solid rgba(239, 68, 68, 0.2)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#ef4444',
-          flexShrink: 0,
-          boxShadow: '0 0 15px rgba(239, 68, 68, 0.15)'
-        }}>
-          <Sparkles size={20} />
+  const itemVariants: Variants = {
+    hidden: { opacity: 0, y: 6 },
+    show: {
+      opacity: 1,
+      y: 0,
+      transition: { type: "spring" as const, stiffness: 120, damping: 14 }
+    }
+  };
+
+  return (
+    <motion.div 
+      className="flex flex-col gap-3.5 w-full h-full min-h-0 overflow-y-auto px-0.5 pb-2"
+      initial="hidden"
+      animate="show"
+      variants={containerVariants}
+    >
+      {/* 1. WELCOME COCKPIT PANEL (Obsidian glass with custom double border glows) */}
+      <motion.div 
+        variants={itemVariants}
+        className="cockpit-card cockpit-card--dualrim p-5 flex items-center gap-4 relative overflow-hidden"
+      >
+        {/* Soft atmospheric background glow */}
+        <div className="absolute -top-12 -left-12 w-32 h-32 rounded-full bg-red-500/5 blur-2xl pointer-events-none" />
+
+        <div className="w-11 h-11 rounded-xl bg-red-500/5 border border-red-500/20 flex items-center justify-center text-red-400 shrink-0 shadow-[0_0_12px_rgba(239,68,68,0.1)]">
+          <Sparkles size={18} />
         </div>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 style={{
-            fontSize: '0.88rem',
-            fontWeight: 800,
-            color: '#f4f4f5',
-            letterSpacing: '-0.02em',
-            margin: '0 0 0.2rem 0'
-          }}>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-extrabold text-zinc-100 tracking-tight mb-0.5">
             Ask a question to generate your first analysis
           </h2>
-          <p style={{
-            color: '#71717a',
-            fontSize: '0.72rem',
-            lineHeight: 1.45,
-            margin: 0,
-            maxWidth: '540px'
-          }}>
-            Draft a question in the search bar above or choose a preset analysis card below. 
-            Clicking column chips below will append them to your query.
+          <p className="text-zinc-400 text-xs leading-relaxed max-w-2xl">
+            Draft a question in the query bar above or select one of the suggested cards below to generate a beautiful analysis. You can also click columns in the field directory to append them.
           </p>
         </div>
-      </div>
+      </motion.div>
 
       {/* 2. DATASET METRICS GRID */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '0.55rem',
-        flexShrink: 0
-      }}>
+      <motion.div 
+        variants={itemVariants}
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 shrink-0"
+      >
         {[
-          { label: 'DATASET', value: datasetName.replace(/\.[^/.]+$/, "").replace(/_/g, " "), sub: datasetName, color: '#ef4444', icon: <Database size={13} /> },
-          { label: 'RECORDS COUNT', value: rowCount.toLocaleString(), sub: 'In-memory rows active', color: '#a1a1aa', icon: <Layers size={13} /> },
-          { label: 'SCHEMA FIELDS', value: columns.length, sub: 'Queryable metrics', color: '#a1a1aa', icon: <Fingerprint size={13} /> },
-          { label: 'ENGINE STATUS', value: 'SQLite Local', sub: 'In-browser SQLite', color: '#10b981', icon: <Shield size={13} /> }
-        ].map((k, ki) => (
-          <div key={ki} style={{
-            background: 'linear-gradient(135deg, #0e0e12 0%, #080405 100%)',
-            border: `1.5px solid ${k.color === '#ef4444' ? 'rgba(239, 68, 68, 0.18)' : k.color === '#10b981' ? 'rgba(16, 185, 129, 0.18)' : '#1f1f23'}`,
-            borderRadius: '10px',
-            padding: '0.65rem 0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.7rem',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
-          }}>
-            <div style={{
-              width: '26px',
-              height: '26px',
-              borderRadius: '6px',
-              background: k.color === '#ef4444' ? 'rgba(239, 68, 68, 0.05)' : k.color === '#10b981' ? 'rgba(16, 185, 129, 0.05)' : 'rgba(255,255,255,0.02)',
-              border: `1.5px solid ${k.color === '#ef4444' ? 'rgba(239, 68, 68, 0.15)' : k.color === '#10b981' ? 'rgba(16, 185, 129, 0.15)' : '#27272a'}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: k.color === '#ef4444' ? '#ef4444' : k.color === '#10b981' ? '#10b981' : '#71717a',
-              flexShrink: 0
-            }}>
-              {k.icon}
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{
-                fontSize: '0.52rem',
-                color: '#52525b',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em'
-              }}>
-                {k.label}
+          { 
+            label: 'DATASET', 
+            value: datasetName.replace(/\.[^/.]+$/, "").replace(/_/g, " "), 
+            sub: datasetName, 
+            variant: 'coral', 
+            icon: <Database size={13} className="text-red-400" />,
+            pillColor: 'bg-red-500/30'
+          },
+          { 
+            label: 'RECORDS COUNT', 
+            value: rowCount.toLocaleString(), 
+            sub: 'In-memory rows active', 
+            variant: 'zinc', 
+            icon: <Layers size={13} className="text-zinc-400" />,
+            pillColor: 'bg-zinc-700/30'
+          },
+          { 
+            label: 'SCHEMA FIELDS', 
+            value: columns.length, 
+            sub: 'Queryable parameters', 
+            variant: 'zinc', 
+            icon: <Fingerprint size={13} className="text-zinc-400" />,
+            pillColor: 'bg-zinc-700/30'
+          },
+          { 
+            label: 'ENGINE STATUS', 
+            value: 'SQLite Sandbox', 
+            sub: 'Local private sandbox', 
+            variant: 'emerald', 
+            icon: <Shield size={13} className="text-emerald-400" />,
+            pillColor: 'bg-emerald-500/30'
+          }
+        ].map((k, ki) => {
+          const rimClass = k.variant === 'coral' ? '' : k.variant === 'emerald' ? 'green' : 'violet';
+          return (
+            <div 
+              key={ki} 
+              className={`cockpit-card cockpit-card--dualrim ${rimClass} px-3.5 py-3 flex items-center gap-3.5`}
+            >
+              <div className="w-7 h-7 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-center shrink-0">
+                {k.icon}
               </div>
-              <div style={{
-                fontSize: '1.05rem',
-                fontWeight: 800,
-                color: k.color === '#ef4444' ? '#ef4444' : k.color === '#10b981' ? '#10b981' : '#f4f4f5',
-                lineHeight: 1.1,
-                margin: '1px 0',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap'
-              }}>
-                {k.value}
-              </div>
-              <div style={{
-                fontSize: '0.54rem',
-                color: '#71717a',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: '120px'
-              }}>
-                {k.sub}
+              <div className="min-w-0 flex-1">
+                <div className="text-[9px] text-zinc-400 font-bold tracking-wider uppercase">
+                  {k.label}
+                </div>
+                <div className="text-[1.05rem] font-black text-zinc-200 leading-none my-1 truncate">
+                  {k.value}
+                </div>
+                {/* Visual indicator bar under metric */}
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <div className="h-1 w-12 bg-zinc-900 rounded-full overflow-hidden">
+                    <div className={`h-full w-2/3 ${k.pillColor} rounded-full`} />
+                  </div>
+                  <span className="text-[9px] text-zinc-400 truncate leading-none">{k.sub}</span>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          );
+        })}
+      </motion.div>
 
-      {/* 3. ROW 2: AVAILABLE FIELDS (LEFT) + SUGGESTED ANALYSES (RIGHT) */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 1.6fr',
-        gap: '0.6rem',
-        flexShrink: 0
-      }}>
+      {/* 3. ROW 3: AVAILABLE FIELDS (LEFT) + SUGGESTED ANALYSES (RIGHT) */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5 min-h-0 flex-1">
         {/* A. AVAILABLE FIELDS DIRECTORY */}
-        <div style={{
-          background: 'linear-gradient(180deg, #0e0e12 0%, #080405 100%)',
-          border: '1.5px solid #1f1f23',
-          borderRadius: '12px',
-          padding: '0.9rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.6rem',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{
-              fontSize: '0.62rem',
-              color: '#f4f4f5',
-              fontWeight: 800,
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em'
-            }}>
-              Available Fields ({columns.length})
+        <motion.div 
+          variants={itemVariants}
+          className="md:col-span-2 cockpit-card p-4 flex flex-col gap-3 min-h-[300px]"
+        >
+          <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2">
+            <span className="text-[10px] text-zinc-400 font-extrabold uppercase tracking-wider">
+              Field Directory ({columns.length})
             </span>
-            <span style={{ fontSize: '0.54rem', color: '#71717a' }}>Append to Q&A</span>
+            <span className="text-[9px] text-zinc-500 font-medium">Click to append</span>
           </div>
 
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.35rem',
-            maxHeight: '260px',
-            overflowY: 'auto',
-            paddingRight: '0.15rem'
-          }}>
+          <div className="flex flex-col gap-1.5 overflow-y-auto pr-0.5 flex-1 max-h-[380px]">
             {columns.map((col) => {
               const isNum = col.type === 'number' || ['DECIMAL', 'INTEGER', 'BIGINT', 'FLOAT'].includes((col.type || '').toUpperCase());
               return (
-                <div
+                <motion.div
                   key={col.name}
                   onClick={() => onSelectField(col.name)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.55rem',
-                    padding: '0.4rem 0.55rem',
-                    borderRadius: '6px',
-                    background: '#09090c',
-                    border: '1px solid #1a1a20',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
+                  className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-zinc-950/40 border border-zinc-900/60 cursor-pointer select-none"
+                  whileHover={{
+                    x: 2,
+                    borderColor: isNum ? "rgba(239, 68, 68, 0.25)" : "rgba(59, 130, 246, 0.25)",
+                    backgroundColor: "rgba(255, 255, 255, 0.01)"
                   }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.borderColor = 'rgba(239,68,68,0.25)';
-                    e.currentTarget.style.background = '#110a0d';
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = '#1a1a20';
-                    e.currentTarget.style.background = '#09090c';
-                  }}
+                  whileTap={{ scale: 0.985 }}
+                  transition={{ duration: 0.15 }}
                 >
-                  <span style={{
-                    fontFamily: 'monospace',
-                    fontSize: '0.58rem',
-                    fontWeight: 800,
-                    width: 14,
-                    color: isNum ? '#ef4444' : '#3b82f6',
-                    textAlign: 'center'
-                  }}>
+                  <span className={`font-mono text-[9px] font-black w-5 text-center ${isNum ? 'text-red-400' : 'text-blue-400'}`}>
                     {isNum ? '#' : 'Aa'}
                   </span>
-                  <span style={{
-                    fontSize: '0.68rem',
-                    color: '#e4e4e7',
-                    flex: 1,
-                    fontWeight: 500,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}>
+                  <span className="text-xs font-semibold text-zinc-300 flex-1 truncate">
                     {col.name}
                   </span>
-                  <span style={{
-                    fontSize: '0.52rem',
-                    color: '#52525b',
-                    fontFamily: 'monospace',
-                    textTransform: 'uppercase'
-                  }}>
+                  <span className="text-[9px] text-zinc-500 font-mono uppercase bg-zinc-900 border border-zinc-800/40 px-1 py-0.5 rounded">
                     {(col.type || 'str').toLowerCase()}
                   </span>
-                </div>
+                </motion.div>
               );
             })}
           </div>
-        </div>
+        </motion.div>
 
         {/* B. DYNAMIC SUGGESTED ANALYSES */}
-        <div style={{
-          background: 'linear-gradient(180deg, #0e0e12 0%, #080405 100%)',
-          border: '1.5px solid #1f1f23',
-          borderRadius: '12px',
-          padding: '0.9rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.6rem',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
-        }}>
-          <span style={{
-            fontSize: '0.62rem',
-            color: '#f4f4f5',
-            fontWeight: 800,
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em'
-          }}>
-            Suggested Analyses (Auto-Run)
+        <motion.div 
+          variants={itemVariants}
+          className="md:col-span-3 cockpit-card p-4 flex flex-col gap-3 min-h-[300px]"
+        >
+          <span className="text-[10px] text-zinc-400 font-extrabold uppercase tracking-wider border-b border-zinc-800/40 pb-2">
+            Suggested Analyses
           </span>
 
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(2, 1fr)',
-            gap: '0.5rem',
-            flex: 1
-          }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 flex-1 max-h-[380px] overflow-y-auto pr-0.5">
             {suggestedQuestions.map((item, idx) => (
-              <div
+              <motion.div
                 key={idx}
                 onClick={() => onSelectQuestion(item.query)}
-                style={{
-                  background: '#09090c',
-                  border: '1px solid #1a1a20',
-                  borderRadius: '10px',
-                  padding: '0.75rem 0.85rem',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.25rem',
-                  justifyContent: 'space-between',
-                  position: 'relative',
-                  overflow: 'hidden'
+                className="cockpit-card cockpit-card--dualrim cockpit-hover p-4 flex flex-col justify-between select-none relative"
+                whileHover={{
+                  y: -1.5,
+                  scale: 1.005,
+                  borderColor: "rgba(239, 68, 68, 0.30)",
+                  boxShadow: "0 12px 40px rgba(0, 0, 0, 0.70), 0 8px 24px rgba(239, 68, 68, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.03)"
                 }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.35)';
-                  e.currentTarget.style.background = '#110a0d';
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = '#1a1a20';
-                  e.currentTarget.style.background = '#09090c';
-                  e.currentTarget.style.transform = 'none';
-                }}
+                whileTap={{ scale: 0.995 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                  <div style={{
-                    width: '20px',
-                    height: '20px',
-                    borderRadius: '5px',
-                    background: 'rgba(239, 68, 68, 0.04)',
-                    border: '1px solid rgba(239, 68, 68, 0.12)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#ef4444',
-                    flexShrink: 0
-                  }}>
-                    <span style={{ fontSize: '0.62rem' }}>📊</span>
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-5 h-5 rounded-md bg-red-500/5 border border-red-500/10 flex items-center justify-center text-xs">
+                      📊
+                    </div>
+                    <div className="text-xs font-black text-zinc-300 truncate">
+                      {item.title}
+                    </div>
                   </div>
-                  <div style={{
-                    fontSize: '0.68rem',
-                    fontWeight: 700,
-                    color: '#f4f4f5',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}>
-                    {item.title}
+                  <div className="text-[11px] text-zinc-400 leading-normal line-clamp-2">
+                    {item.query}
                   </div>
                 </div>
 
-                <div style={{
-                  fontSize: '0.6rem',
-                  color: '#71717a',
-                  lineHeight: 1.4,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  marginTop: '0.35rem',
-                  flex: 1
-                }}>
-                  {item.query}
+                <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider text-right mt-3">
+                  Run Query →
                 </div>
-
-                <div style={{
-                  fontSize: '0.52rem',
-                  color: '#ef4444',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                  marginTop: '0.4rem',
-                  textAlign: 'right'
-                }}>
-                  Execute Query →
-                </div>
-              </div>
+              </motion.div>
             ))}
           </div>
-        </div>
+        </motion.div>
       </div>
 
-      {/* 4. LOCAL SECURITY COCKPIT FOOTER STATUS */}
-      <div style={{
-        background: '#0a0a0d',
-        border: '1.5px solid #14141a',
-        borderRadius: '10px',
-        padding: '0.65rem 0.85rem',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-around',
-        flexWrap: 'wrap',
-        gap: '0.6rem',
-        flexShrink: 0
-      }}>
+      {/* 4. LOCAL SECURITY COCKPIT FOOTER */}
+      <motion.div 
+        variants={itemVariants}
+        className="cockpit-card px-4 py-3 flex items-center justify-around flex-wrap gap-4 shrink-0 text-zinc-400 border border-zinc-900"
+      >
         {[
-          { icon: <Shield size={14} />, text: 'Private Local Execution Active', desc: 'No remote APIs or data transfer', color: '#10b981' },
-          { icon: <Lock size={14} />, text: 'PII In-Memory Auto-Redaction', desc: 'Sensitive data scrubbed automatically', color: '#10b981' },
-          { icon: <Fingerprint size={14} />, text: 'SQLite Zero-Trust Sandbox', desc: 'Queries run client-side inside memory', color: '#10b981' }
+          { icon: <Shield size={14} className="text-emerald-400" />, text: 'Private Local Active', desc: 'No remote APIs used' },
+          { icon: <Lock size={14} className="text-emerald-400" />, text: 'PII Auto-Redaction', desc: 'Sensitive data scrubbed' },
+          { icon: <Fingerprint size={14} className="text-emerald-400" />, text: 'Zero-Trust Sandbox', desc: 'Executed inside browser' }
         ].map((item, idx) => (
-          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-            <div style={{ color: item.color, display: 'flex', alignItems: 'center' }}>
-              {item.icon}
-            </div>
+          <div key={idx} className="flex items-center gap-2.5">
+            {item.icon}
             <div>
-              <div style={{ fontSize: '0.66rem', fontWeight: 700, color: '#e4e4e7' }}>{item.text}</div>
-              <div style={{ fontSize: '0.54rem', color: '#52525b', marginTop: '0.05rem' }}>{item.desc}</div>
+              <div className="text-[10px] font-bold text-zinc-300">{item.text}</div>
+              <div className="text-[9px] text-zinc-500 mt-0.5">{item.desc}</div>
             </div>
           </div>
         ))}
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

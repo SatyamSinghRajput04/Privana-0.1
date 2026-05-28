@@ -13,6 +13,9 @@ import { runSafeCompute } from '../domain/safeCompute';
 import { ExcludedFeature } from '../domain/safeCompute/types';
 import { localDB } from '../lib/indexedDb';
 import { useVaultStore } from '../store/useVaultStore';
+import { useWorkspaceStore } from '../store/useWorkspaceStore';
+import { useCockpitStore } from '../store/useCockpitStore';
+import { planWorkspace, executeWorkspaceActiveTab } from '../domain/analytics/workspaceQueryEngine';
 import { 
   Moon, Users, Heart, Database, Search, Filter, Save, Layers, ChevronRight, 
   Menu, Info, Star, ShieldAlert, Sparkles, FolderClosed, RefreshCw, TrendingUp,
@@ -240,6 +243,14 @@ const COLORS = ['#eab308', '#3b82f6', '#ef4444', '#a855f7', '#f97316', '#06b6d4'
 
 export default function AnalyzePage({ setPage, onMenu }: P) {
   const { ws, datasets, selectedDataset, setSelectedDataset, saveBookmark } = useVaultStore();
+  const { 
+    workspacePipelineEnabled, 
+    activeWorkspace, 
+    activeSheetId, 
+    setActiveSheetId, 
+    setWorkspaceBlueprint,
+    setWorkspaceInFlight
+  } = useWorkspaceStore();
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   const [activeTab, setActiveTab] = useState<'report' | 'data' | 'model'>('report');
@@ -277,7 +288,11 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const [qaInput, setQaInput] = useState('');
   const [qaLoading, setQaLoading] = useState(false);
   const [qaResponse, setQaResponse] = useState<any | null>(null);
-  const [analyticsPipelineEnabled, setAnalyticsPipelineEnabled] = useState(() => isFlagOn('USE_NEW_ANALYTICS_PIPELINE'));
+  // Always default to NEW ENGINE on mount — clear any stale localStorage 'false' left by old toggle clicks
+  const [analyticsPipelineEnabled, setAnalyticsPipelineEnabled] = useState(() => {
+    try { localStorage.removeItem('flags_USE_NEW_ANALYTICS_PIPELINE'); localStorage.removeItem('flags_USE_NEW_ANALYTICS_VISUALS'); } catch {}
+    return true;
+  });
   const isDev = typeof process !== 'undefined' ? process.env?.NODE_ENV !== 'production' : ((import.meta as any).env?.DEV ?? true);
 
   const resultContainerRef = useRef<HTMLDivElement>(null);
@@ -375,6 +390,28 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     const names = columnsList.map(c => c.name.toLowerCase());
     return names.includes('sleep_hours') && names.includes('gender') && names.includes('age');
   }, [columnsList]);
+
+  const compileCockpitFilters = (): any[] => {
+    const list: any[] = [];
+    if (isMentalHealthSchema) {
+      const activeGenders = Object.entries(genderFilter).filter(([_, v]) => v).map(([k]) => k);
+      if (activeGenders.length > 0 && activeGenders.length < 2) {
+        list.push({ column: 'gender', operator: 'eq', value: activeGenders[0] });
+      } else if (activeGenders.length === 0) {
+        list.push({ column: 'gender', operator: 'eq', value: '__none__' });
+      }
+
+      const activePlatforms = Object.entries(platformFilter).filter(([_, v]) => v).map(([k]) => k);
+      if (activePlatforms.length > 0 && activePlatforms.length < 5) {
+        list.push({ column: 'platform_usage', operator: 'in', value: activePlatforms });
+      } else if (activePlatforms.length === 0) {
+        list.push({ column: 'platform_usage', operator: 'eq', value: '__none__' });
+      }
+
+      list.push({ column: 'age', operator: 'between', value: [ageRange[0], ageRange[1]] });
+    }
+    return list;
+  };
 
   const suggestedCards = useMemo(() => {
     if (!selectedDataset || !columnsList.length) return [];
@@ -1754,6 +1791,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
           };
           
           const result = await runAnalyticsQuestion(inputToUse, context);
+
           
           // Log results locally
           try {
@@ -2142,6 +2180,11 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     const schema = getTableSchema(tableName);
     setColumnsList(schema);
 
+    if (workspacePipelineEnabled && (!activeWorkspace || activeWorkspace.datasetId !== selectedDataset.name)) {
+      const blueprint = planWorkspace(selectedDataset.name, schema);
+      setWorkspaceBlueprint(blueprint);
+    }
+
     const tbl = getSqlTableName(tableName);
 
     // Compute baseline counts if it's the mental health dataset using JS loop
@@ -2421,6 +2464,27 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
       console.error('Calculation failure:', e);
     }
   }, [selectedDataset, genderFilter, platformFilter, ageRange, isMentalHealthSchema, tableLoadedState]);
+
+  // Trigger workspace tab execution when active tab or filters change
+  useEffect(() => {
+    if (workspacePipelineEnabled && selectedDataset && activeWorkspace && activeSheetId) {
+      const runId = useCockpitStore.getState().startNewRun();
+      const cockpitFilters = compileCockpitFilters();
+      
+      setWorkspaceInFlight(true);
+      executeWorkspaceActiveTab(selectedDataset.name, cockpitFilters, runId).finally(() => {
+        setWorkspaceInFlight(false);
+      });
+    }
+  }, [
+    selectedDataset,
+    genderFilter,
+    platformFilter,
+    ageRange,
+    activeSheetId,
+    workspacePipelineEnabled,
+    activeWorkspace
+  ]);
 
   // Filter lists by search query
   const filteredColumns = columnsList.filter(col => 
@@ -2997,8 +3061,14 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                         aria-pressed={analyticsPipelineEnabled}
                         onClick={() => {
                           const nextVal = !analyticsPipelineEnabled;
-                          localStorage.setItem('flags_USE_NEW_ANALYTICS_PIPELINE', String(nextVal));
-                          localStorage.setItem('flags_USE_NEW_ANALYTICS_VISUALS', String(nextVal));
+                          // Sync localStorage so isFlagOn reads the right value on next render
+                          if (nextVal) {
+                            localStorage.removeItem('flags_USE_NEW_ANALYTICS_PIPELINE');
+                            localStorage.removeItem('flags_USE_NEW_ANALYTICS_VISUALS');
+                          } else {
+                            localStorage.setItem('flags_USE_NEW_ANALYTICS_PIPELINE', 'false');
+                            localStorage.setItem('flags_USE_NEW_ANALYTICS_VISUALS', 'false');
+                          }
                           setAnalyticsPipelineEnabled(nextVal);
                         }}
                         style={{
@@ -3354,7 +3424,21 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                    UNIFIED DASHBOARD SHELL â€” permanent operating system
                    All query types render inside this grid. Only data changes.
                    ═══════════════════════════════════════════════════════════════════ */
-                analyticsPipelineEnabled ? (
+                workspacePipelineEnabled && activeWorkspace ? (
+                  /* STATE 4: Workspace Engine Canvas Dashboard */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
+                    <ResultView 
+                      result={{
+                        status: 'computed',
+                        plan: { planId: 'workspace', intent: 'summary', confidence: 1, source: 'pattern' },
+                        data: { status: 'success', rows: [] },
+                        chart: { chartType: 'none' },
+                        narrative: '',
+                        provenance: { question: 'Workspace Canvas', planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
+                      }} 
+                    />
+                  </div>
+                ) : analyticsPipelineEnabled ? (
                     hasQueryResult ? (
                       /* STATE 3: Query Result Dashboard */
                       <div ref={resultContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
@@ -4175,28 +4259,53 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
             fontSize: '0.68rem',
             flexShrink: 0
           }}>
-            {['Overview', 'Sleep Analysis', 'Stress Analysis', 'Platform Usage', 'Demographics'].map((tabName) => {
-              const isActive = bottomTab === tabName;
-              return (
-                <button
-                  key={tabName}
-                  style={{
-                    background: isActive ? '#0e0e12' : 'transparent',
-                    color: isActive ? '#ef4444' : '#71717a',
-                    border: isActive ? '1px solid #3c1417' : '1px solid transparent',
-                    borderBottom: isActive ? '1px solid transparent' : '1px solid transparent',
-                    borderRadius: '4px 4px 0 0',
-                    padding: '3px 10px',
-                    fontSize: '0.65rem',
-                    fontWeight: isActive ? 700 : 500,
-                    cursor: 'pointer'
-                  }}
-                  onClick={() => setBottomTab(tabName)}
-                >
-                  {tabName}
-                </button>
-              );
-            })}
+            {workspacePipelineEnabled && activeWorkspace ? (
+              activeWorkspace.sheets.map((sheet) => {
+                const isActive = activeSheetId === sheet.id;
+                return (
+                  <button
+                    key={sheet.id}
+                    style={{
+                      background: isActive ? '#0e0e12' : 'transparent',
+                      color: isActive ? '#ef4444' : '#71717a',
+                      border: isActive ? '1px solid #3c1417' : '1px solid transparent',
+                      borderBottom: isActive ? '1px solid transparent' : '1px solid transparent',
+                      borderRadius: '4px 4px 0 0',
+                      padding: '3px 10px',
+                      fontSize: '0.65rem',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => setActiveSheetId(sheet.id)}
+                  >
+                    {sheet.name}
+                  </button>
+                );
+              })
+            ) : (
+              ['Overview', 'Sleep Analysis', 'Stress Analysis', 'Platform Usage', 'Demographics'].map((tabName) => {
+                const isActive = bottomTab === tabName;
+                return (
+                  <button
+                    key={tabName}
+                    style={{
+                      background: isActive ? '#0e0e12' : 'transparent',
+                      color: isActive ? '#ef4444' : '#71717a',
+                      border: isActive ? '1px solid #3c1417' : '1px solid transparent',
+                      borderBottom: isActive ? '1px solid transparent' : '1px solid transparent',
+                      borderRadius: '4px 4px 0 0',
+                      padding: '3px 10px',
+                      fontSize: '0.65rem',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => setBottomTab(tabName)}
+                  >
+                    {tabName}
+                  </button>
+                );
+              })
+            )}
             <button 
               style={{ background: 'transparent', border: 'none', color: '#71717a', fontSize: '0.8rem', padding: '0 6px', cursor: 'pointer' }}
               onClick={() => alert('New analysis sheet tab added!')}

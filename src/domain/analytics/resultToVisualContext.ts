@@ -151,17 +151,20 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
   const rawRows = data?.rows || [];
 
   switch (plan.intent) {
+    case 'comparison':
+    case 'ranking':
+    case 'feature_importance':
     case 'grouped_average': {
       const payload = rawRows.map(r => ({
-        category: String(r.category_label || r.group_label || Object.values(r)[0] || ''),
-        value: Number(r.average_value || r.mean || r.avg || Object.values(r)[1] || 0)
+        category: String(r.category_label || r.rank_label || r.group_label || r.feature || Object.values(r)[0] || ''),
+        value: Number(r.average_value || r.metric_value || r.mean || r.avg || r.association || Object.values(r)[1] || 0)
       }));
       return {
         kind: 'groupedAverages',
         schemaVersion: 1,
         data: payload,
-        xAxisLabel: plan.groupBy?.[0] || 'Category',
-        yAxisLabel: `Average of ${plan.metric || 'Value'}`
+        xAxisLabel: plan.intent === 'feature_importance' ? 'Feature' : (plan.groupBy?.[0] || 'Category'),
+        yAxisLabel: plan.intent === 'feature_importance' ? 'Association Strength' : (plan.intent === 'ranking' ? `Ranked by ${plan.metric || 'Value'}` : `Average of ${plan.metric || 'Value'}`)
       };
     }
 
@@ -177,6 +180,9 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
       const pVal = typeof stats.pValue === 'number' ? stats.pValue : 1.0;
       const rVal = typeof stats.r === 'number' ? stats.r : 0.0;
       const slope = typeof stats.slope === 'number' ? stats.slope : 0.0;
+      // Embed sampleSize and method so contextual card footer can display correct n
+      const sampleSize = typeof stats.sampleSize === 'number' ? stats.sampleSize : payload.length;
+      const method = typeof stats.method === 'string' ? stats.method : 'Pearson';
 
       return {
         kind: 'correlationSummary',
@@ -185,9 +191,11 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
         rValue: rVal,
         pValue: pVal,
         trendSlope: slope,
+        sampleSize,
+        method,
         xAxisLabel: plan.metric || 'Variable X',
         yAxisLabel: plan.target || 'Variable Y'
-      };
+      } as any;
     }
 
     case 'distribution': {
@@ -206,7 +214,6 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
     }
 
     case 'filter':
-    case 'ranking':
     case 'summary':
     default: {
       const cols = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];

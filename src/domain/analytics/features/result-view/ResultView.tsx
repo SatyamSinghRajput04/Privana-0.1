@@ -16,12 +16,14 @@ interface ResultViewProps {
   result: AnalyticsResult;
   onSelectChoice?: (choice: ClarificationChoice) => void;
   onSelectQuestion?: (question: string) => void;
+  onBypass?: () => void;
 }
 
 export const ResultView: React.FC<ResultViewProps> = ({ 
   result, 
   onSelectChoice = () => {}, 
-  onSelectQuestion = () => {} 
+  onSelectQuestion = () => {},
+  onBypass
 }) => {
   switch (result.status) {
     case 'computed':
@@ -30,7 +32,7 @@ export const ResultView: React.FC<ResultViewProps> = ({
     case 'clarify':
       return <ClarifyView result={result} onSelectChoice={onSelectChoice} />;
     case 'blocked':
-      return <BlockedView result={result} />;
+      return <BlockedView result={result} onBypass={onBypass} />;
     case 'unsupported':
       return <UnsupportedView result={result} onSelectQuestion={onSelectQuestion} />;
     case 'refused':

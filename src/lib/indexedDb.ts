@@ -44,6 +44,10 @@ export interface LocalSaved {
   notes: string;
   pinned: boolean;
   created_at: string;
+  // Optional chart meta for solo mode (avoids needing a join like server mode's viq_queries)
+  chart_type?: string;
+  execution_ms?: number;
+  row_count?: number;
 }
 
 export interface AuditLog {
@@ -242,6 +246,49 @@ export const localDB = {
       const request = index.getAll(workspaceId);
       request.onsuccess = () => resolve(request.result as LocalSaved[] || []);
       request.onerror = () => reject(request.error);
+    });
+  },
+
+  async deleteBookmark(id: number): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('saved', 'readwrite');
+      const store = transaction.objectStore('saved');
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  },
+
+  async deleteQuery(id: number): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('queries', 'readwrite');
+      const store = transaction.objectStore('queries');
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  },
+
+  async updateBookmark(id: number, updates: Partial<LocalSaved>): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('saved', 'readwrite');
+      const store = transaction.objectStore('saved');
+      const getRequest = store.get(id);
+      getRequest.onsuccess = () => {
+        const record = getRequest.result as LocalSaved | undefined;
+        if (record) {
+          const updated = { ...record, ...updates };
+          const putRequest = store.put(updated);
+          putRequest.onsuccess = () => resolve();
+          putRequest.onerror = () => reject(putRequest.error);
+        } else {
+          resolve();
+        }
+      };
+      getRequest.onerror = () => reject(getRequest.error);
     });
   },
 

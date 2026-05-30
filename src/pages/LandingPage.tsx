@@ -11,20 +11,29 @@ export default function LandingPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [tab, setTab] = useState<'product' | 'downloads' | 'host'>('product');
+
+  const hasPassphrase = typeof localStorage !== 'undefined' && !!localStorage.getItem('privana_passphrase_hash');
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     setLoading(true);
-    // Simulate slight loading latency for senior UX feel
+    
+    // Simulate slight loading latency for premium UX feel
     setTimeout(async () => {
-      if (mode === 'solo') {
-        await login('solo');
-      } else {
-        await login('server', serverUrl);
+      try {
+        if (mode === 'solo') {
+          await login('solo', { passphrase });
+        } else {
+          await login('server', { email, password, serverUrl });
+        }
+      } catch (err: any) {
+        setError(err.message || 'Authentication failed.');
+        setLoading(false);
       }
-      setLoading(false);
-    }, 1200);
+    }, 800);
   };
 
   const codeGuide = `docker run -d \\
@@ -331,6 +340,20 @@ export default function LandingPage() {
 
           {/* Dynamic Login Form */}
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {error && (
+              <div style={{
+                fontSize: '0.72rem',
+                color: '#ef4444',
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                borderRadius: 8,
+                padding: '0.7rem 0.9rem',
+                lineHeight: 1.45
+              }}>
+                ⚠️ {error}
+              </div>
+            )}
+
             <AnimatePresence mode="wait">
               {mode === 'solo' ? (
                 <motion.div
@@ -350,11 +373,15 @@ export default function LandingPage() {
                     padding: '0.7rem 0.9rem',
                     lineHeight: 1.45
                   }}>
-                    💡 **Solo Mode:** Persists workspaces, databases, and schemas locally in IndexedDB. No login credentials required. Optionally configure a master passphrase to secure the local profile database.
+                    {hasPassphrase 
+                      ? '🔒 **Locked Local Profile:** Your database is secured. Enter your passphrase below to unlock.' 
+                      : '💡 **Solo Mode:** Runs fully offline. To encrypt your local data, enter any passphrase to register it. You will use this same key to unlock your workspace on your next visit.'}
                   </div>
 
                   <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label" style={{ fontSize: '0.7rem' }}>Master Key / Passphrase (Optional)</label>
+                    <label className="form-label" style={{ fontSize: '0.7rem' }}>
+                      {hasPassphrase ? 'Enter Passphrase to Unlock' : 'Master Key / Passphrase (Optional)'}
+                    </label>
                     <div style={{ position: 'relative' }}>
                       <Key size={14} style={{ position: 'absolute', left: 12, top: 11, color: 'var(--t3)' }} />
                       <input
@@ -364,6 +391,7 @@ export default function LandingPage() {
                         style={{ paddingLeft: '2.1rem' }}
                         value={passphrase}
                         onChange={(e) => setPassphrase(e.target.value)}
+                        autoFocus={hasPassphrase}
                       />
                     </div>
                   </div>
@@ -432,11 +460,39 @@ export default function LandingPage() {
                 'Securing environment...'
               ) : (
                 <>
-                  {mode === 'solo' ? 'Launch Local Workspace' : 'Authenticate & Sync'}
+                  {mode === 'solo' 
+                    ? (hasPassphrase ? 'Unlock Local Workspace' : 'Launch Local Workspace') 
+                    : 'Authenticate & Sync'}
                   <ArrowRight size={14} />
                 </>
               )}
             </button>
+
+            {hasPassphrase && mode === 'solo' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm("Resetting your local profile will erase all local workspaces, datasets, and history. This action cannot be undone. Are you sure you want to proceed?")) {
+                    localStorage.clear();
+                    indexedDB.deleteDatabase('privana_local_db');
+                    window.location.reload();
+                  }
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--t4)',
+                  fontSize: '0.68rem',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  marginTop: '0.25rem',
+                  width: '100%'
+                }}
+              >
+                Forgot passphrase? Reset Local Profile
+              </button>
+            )}
           </form>
         </div>
       </main>

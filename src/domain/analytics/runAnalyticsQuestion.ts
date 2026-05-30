@@ -3,7 +3,7 @@
 // S9 ORCHESTRATOR — Main pipeline planning, validation, execution & narative compiler.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { validateDatasetSafety } from '../safeCompute/preflight';
+import { validateDatasetSafety, METADATA_SIGNALS } from '../safeCompute/preflight';
 import { IntentPlanner } from './intentPlanner';
 import { SlotResolver } from './slotResolver';
 import { PlanValidator } from './planValidator';
@@ -21,11 +21,40 @@ import { RankingExecutor } from './executors/ranking';
 import { FilterExecutor } from './executors/filter';
 import { ComparisonExecutor } from './executors/comparison';
 
-interface AnalyticsContext {
+export interface AnalyticsContext {
   tableName: string;
   rows: any[];
   profile: any;
+  bypassMetadataCheck?: boolean;
+  minRowCount?: number;
 }
+
+/**
+ * Orchestrator entry point that routes a user question to the correct terminal state.
+ */
+export const METADATA_BYPASS_WARNING = 'This dataset appears to be a metadata/schema descriptor file. The calculated results below might not be statistically meaningful.';
+
+const HARD_FLOOR: Record<string, number> = {
+  summary: 1,
+  distribution: 1,
+  grouped_average: 1,
+  correlation: 3,
+  feature_importance: 3,
+  ranking: 1,
+  filter: 1,
+  comparison: 3,
+};
+
+const INTENT_LABELS: Record<string, string> = {
+  summary: 'summary',
+  distribution: 'distribution',
+  grouped_average: 'grouped average',
+  correlation: 'correlation',
+  feature_importance: 'feature importance',
+  ranking: 'ranking',
+  filter: 'filter',
+  comparison: 'comparison',
+};
 
 /**
  * Orchestrator entry point that routes a user question to the correct terminal state.
@@ -43,12 +72,27 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     plannerAttempts: 1,
   });
 
-  // 1. Run Preflight Safety Checks
-  const safetyBlock = validateDatasetSafety(rows, tableName);
+  // ─────────────────────────────────────────────────────────────
+  // ORDER IS LOAD-BEARING. DO NOT REORDER THESE BLOCKS.
+  //   1. preflight (metadata + non-empty)
+  //   2. intent resolution
+  //   3. confidence gate (clarify / unsupported)
+  //   4. intent row-floor (effectiveMin)
+  //   5. post-bypass:
+  //      (a) zero-numeric/zero-categorical -> hard block
+  //      (b) METADATA_SIGNALS re-scan -> partial warning
+  //   6. try/catch { executor dispatch }
+  // ─────────────────────────────────────────────────────────────
+
+  // STEP 1 — Preflight
+  const safetyBlock = validateDatasetSafety(rows, tableName, {
+    allowMetadataBypass: ctx.bypassMetadataCheck
+  });
   if (safetyBlock) {
     return {
       status: 'blocked',
       reason: safetyBlock.reason,
+      bypassAllowed: safetyBlock.bypassAllowed ?? false,
       provenance: buildProvenance(),
     };
   }
@@ -70,13 +114,11 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       };
     }
 
-    // 2. Classify Intent (Layer 1)
-    const plannedIntent = IntentPlanner.plan(question, profile);
-
-    // 3. Resolve Slots (Layer 2)
+    // STEP 2 — Resolve Columns Semantically & Classify Intent
+    const resolvedCols = SemanticResolver.resolve(question, profile);
+    const plannedIntent = IntentPlanner.plan(question, profile, resolvedCols);
     const resolvedSlots = SlotResolver.resolve(question, plannedIntent.intent, profile);
 
-    // 4. Compile Analysis Plan
     const plan: AnalysisPlan = {
       planId: `plan_${plannedIntent.intent}_${Date.now()}`,
       intent: plannedIntent.intent,
@@ -89,7 +131,7 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       source: 'pattern',
     };
 
-    // 4.5 Validate resolved intent is in SUPPORTED_INTENTS (Layer B allowlist enforcement)
+    // STEP 3 — Confidence Gate & Validation
     if (!SUPPORTED_INTENTS.includes(plan.intent)) {
       return {
         status: 'unsupported',
@@ -99,28 +141,39 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       };
     }
 
-    // 5. Validate Plan Schema
+    // Hoist zero-column check to run before missing columns/plan validation
+    const numNumeric = profile.columns.filter((c: any) => c.type === 'numeric').length;
+    const numCategorical = profile.columns.filter((c: any) => c.type === 'category' || c.type === 'text' || c.type === 'boolean').length;
+    if (numNumeric === 0 && numCategorical === 0) {
+      return {
+        status: 'blocked',
+        reason: 'This dataset does not appear to contain any analyzable numeric or categorical columns.',
+        provenance: buildProvenance(),
+      };
+    }
+
+    const missingColumns = SemanticResolver.findMissingColumns(question, profile);
+    if (missingColumns.length > 0) {
+      const allSuggestions: string[] = [];
+      for (const missingCol of missingColumns) {
+        const colSugs = SchemaIntelligence.getSimilarColumns(missingCol, profile);
+        allSuggestions.push(...colSugs);
+      }
+      const uniqueSuggestions = Array.from(new Set(allSuggestions));
+
+      return {
+        status: 'refused',
+        errors: [`Column "${missingColumns.join(', ')}" does not exist in the dataset.`],
+        reason: 'missing_column',
+        missing: missingColumns,
+        message: `Missing column: ${missingColumns.join(', ')}. This column is not present in the loaded dataset.`,
+        suggestions: uniqueSuggestions,
+        provenance: buildProvenance(),
+      };
+    }
+
     const validationErrors = PlanValidator.validate(plan, profile);
     if (validationErrors.length > 0) {
-      const missingColumns = SemanticResolver.findMissingColumns(question, profile);
-      if (missingColumns.length > 0) {
-        const allSuggestions: string[] = [];
-        for (const missingCol of missingColumns) {
-          const colSugs = SchemaIntelligence.getSimilarColumns(missingCol, profile);
-          allSuggestions.push(...colSugs);
-        }
-        const uniqueSuggestions = Array.from(new Set(allSuggestions));
-
-        return {
-          status: 'refused',
-          errors: validationErrors,
-          reason: 'missing_column',
-          missing: missingColumns,
-          message: `Missing column: ${missingColumns.join(', ')}. This column is not present in the loaded dataset.`,
-          suggestions: uniqueSuggestions,
-          provenance: buildProvenance(),
-        };
-      }
       return {
         status: 'refused',
         errors: validationErrors,
@@ -128,7 +181,6 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       };
     }
 
-    // 6. Route by Planner Confidence
     if (plan.confidence < 0.60) {
       return {
         status: 'unsupported',
@@ -139,19 +191,24 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     }
 
     if (plan.confidence >= 0.60 && plan.confidence < 0.85) {
-      // Clarify state
+      // Clarify state: build dynamic choices based on what was resolved.
+      // Fall back to the first numeric column in the profile (not a hardcoded field name).
+      const firstNumericCol = profile?.columns?.find((c: any) => c.type === 'numeric')?.name;
+      const clarifyMetric = plan.metric || firstNumericCol || 'a numeric column';
+      const clarifyGroupBy = plan.groupBy?.[0] || profile?.columns?.find((c: any) => c.type === 'category' || c.type === 'text')?.name;
+
       const choices: ClarificationChoice[] = [
         {
-          label: `Compute distribution of ${plan.metric || 'depression_label'}`,
-          plan: { ...plan, intent: 'distribution' as const, confidence: 0.95 },
-          question: `Show the distribution of ${plan.metric || 'depression_label'}`,
+          label: `Compute distribution of ${clarifyMetric}`,
+          plan: { ...plan, intent: 'distribution' as const, metric: plan.metric || firstNumericCol, confidence: 0.95 },
+          question: `Show the distribution of ${clarifyMetric}`,
         },
       ];
-      if (plan.metric && plan.groupBy && plan.groupBy.length > 0) {
+      if (clarifyMetric && clarifyGroupBy) {
         choices.push({
-          label: `Calculate average ${plan.metric} grouped by ${plan.groupBy[0]}`,
-          plan: { ...plan, intent: 'grouped_average' as const, confidence: 0.95 },
-          question: `Which ${plan.groupBy[0]} has the highest average ${plan.metric}?`,
+          label: `Calculate average ${clarifyMetric} grouped by ${clarifyGroupBy}`,
+          plan: { ...plan, intent: 'grouped_average' as const, metric: plan.metric || firstNumericCol, groupBy: plan.groupBy?.length ? plan.groupBy : [clarifyGroupBy], confidence: 0.95 },
+          question: `Which ${clarifyGroupBy} has the highest average ${clarifyMetric}?`,
         });
       }
       return {
@@ -164,41 +221,88 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       };
     }
 
-    // 7. Dispatch to Executor
-    let execResult: ExecutorResult;
+    // STEP 4 — Intent-specific row floor (RAISE-ONLY: config can tighten, never breach the math floor)
+    const effectiveMin = Math.max(
+      HARD_FLOOR[plan.intent] ?? 1,
+      ctx.minRowCount ?? 0
+    );
 
-    switch (plan.intent) {
-      case 'summary':
-        execResult = SummaryExecutor.execute(plan, rows);
-        break;
-      case 'distribution':
-        execResult = DistributionExecutor.execute(plan, rows);
-        break;
-      case 'grouped_average':
-        execResult = GroupedAverageExecutor.execute(plan, rows);
-        break;
-      case 'correlation':
-        execResult = CorrelationExecutor.execute(plan, rows);
-        break;
-      case 'feature_importance':
-        execResult = FeatureImportanceExecutor.execute(plan, rows);
-        break;
-      case 'ranking':
-        execResult = RankingExecutor.execute(plan, rows);
-        break;
-      case 'filter':
-        execResult = FilterExecutor.execute(plan, rows);
-        break;
-      case 'comparison':
-        execResult = ComparisonExecutor.execute(plan, rows);
-        break;
-      default:
+    if (rows.length < effectiveMin) {
+      const label = INTENT_LABELS[plan.intent] ?? plan.intent;
+      return {
+        status: 'blocked',
+        reason: `This query requires at least ${effectiveMin} rows of data to perform a mathematically valid ${label} analysis. This dataset only contains ${rows.length} rows.`,
+        provenance: buildProvenance(),
+      };
+    }
+
+    // STEP 5 — Post-bypass checks
+    let isMetadataWarningNeeded = false;
+    if (ctx.bypassMetadataCheck) {
+      // (a) zero-numeric/zero-categorical -> hard block
+      const numNumeric = profile.columns.filter((c: any) => c.type === 'numeric').length;
+      const numCategorical = profile.columns.filter((c: any) => c.type === 'category' || c.type === 'text' || c.type === 'boolean').length;
+      if (numNumeric === 0 && numCategorical === 0) {
         return {
-          status: 'unsupported',
-          explanation: `The intent "${plan.intent}" is not supported.`,
-          suggestedQuestions: SchemaIntelligence.suggestQuestions(profile),
+          status: 'blocked',
+          reason: 'This dataset does not appear to contain any analyzable numeric or categorical columns.',
           provenance: buildProvenance(),
         };
+      }
+
+      // (b) METADATA_SIGNALS re-scan -> set warning flag
+      const firstRow = rows[0];
+      if (firstRow && typeof firstRow === 'object') {
+        const keys = Object.keys(firstRow);
+        const found = METADATA_SIGNALS.filter(sig => keys.includes(sig));
+        if (found.length >= 2) {
+          isMetadataWarningNeeded = true;
+        }
+      }
+    }
+
+    // STEP 6 — Executor dispatch wrapped in try/catch
+    let execResult: ExecutorResult;
+    try {
+      switch (plan.intent) {
+        case 'summary':
+          execResult = SummaryExecutor.execute(plan, rows);
+          break;
+        case 'distribution':
+          execResult = DistributionExecutor.execute(plan, rows);
+          break;
+        case 'grouped_average':
+          execResult = GroupedAverageExecutor.execute(plan, rows);
+          break;
+        case 'correlation':
+          execResult = CorrelationExecutor.execute(plan, rows);
+          break;
+        case 'feature_importance':
+          execResult = FeatureImportanceExecutor.execute(plan, rows);
+          break;
+        case 'ranking':
+          execResult = RankingExecutor.execute(plan, rows);
+          break;
+        case 'filter':
+          execResult = FilterExecutor.execute(plan, rows);
+          break;
+        case 'comparison':
+          execResult = ComparisonExecutor.execute(plan, rows);
+          break;
+        default:
+          return {
+            status: 'unsupported',
+            explanation: `The intent "${plan.intent}" is not supported.`,
+            suggestedQuestions: SchemaIntelligence.suggestQuestions(profile),
+            provenance: buildProvenance(),
+          };
+      }
+    } catch (err) {
+      return {
+        status: 'blocked',
+        reason: 'This file could not be analyzed as data. Please check the columns and data rows.',
+        provenance: buildProvenance(),
+      };
     }
 
     if (execResult.status === 'partial_missing') {
@@ -299,16 +403,22 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       narrative = `Successfully compiled descriptive statistics overview.`;
     }
 
-    const finalStatus = execResult.status === 'partial_small_n' ? 'partial' : 'computed';
+    const reasons: string[] = [];
+    if (execResult.status === 'partial_small_n') {
+      reasons.push('Some groups contain fewer than 5 records. Frequencies or statistics for these groups might be suppressed or unreliable.');
+    }
+    if (isMetadataWarningNeeded) {
+      reasons.push(METADATA_BYPASS_WARNING);
+    }
 
-    if (finalStatus === 'partial') {
+    if (reasons.length > 0) {
       return {
         status: 'partial',
         plan,
         data: execResult,
         chart: chartSpec,
         narrative,
-        reasons: ['Some groups contain fewer than 5 records. Frequencies or statistics for these groups might be suppressed or unreliable.'],
+        reasons,
         provenance: buildProvenance(),
       };
     }

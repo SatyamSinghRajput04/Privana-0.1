@@ -22,7 +22,10 @@ export const DistributionExecutor = {
 
     // Check if numeric
     const numericVals = vals.map(v => Number(v)).filter(v => !isNaN(v));
-    const isNumeric = numericVals.length > 0 && (numericVals.length / vals.length) > 0.8;
+    const uniqueNumericVals = new Set(numericVals);
+    const isNumeric = numericVals.length > 0 && 
+                      (numericVals.length / vals.length) > 0.8 &&
+                      (uniqueNumericVals.size > 10 || numericVals.some(v => !Number.isInteger(v)));
 
     const distributionRows: any[] = [];
 

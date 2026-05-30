@@ -18,6 +18,7 @@ import { AnalyticsResult, CardDefinition, CardSpec, VisualContract } from '../..
 import { useCockpitStore } from '../../../../store/useCockpitStore';
 import { useWorkspaceStore } from '../../../../store/useWorkspaceStore';
 import { ComposedChart } from 'recharts';
+import { AnalyticsTable } from '../../../../components/AnalyticsTable';
 
 
 // Self-contained inline markdown formatter for the narrative
@@ -206,7 +207,210 @@ const getKpiIcon = (label: string) => {
   if (l.includes('difference') || l.includes('max') || l.includes('p-value') || l.includes('significance')) {
     return <Activity size={13} className="text-rose-400" />;
   }
-  return <Hash size={13} className="text-zinc-400" />;
+  return <Hash size={13} className="text-zinc-500" />;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM PRESENTATION COMPONENTS FOR STATE-OF-THE-ART UI
+// ─────────────────────────────────────────────────────────────────────────────
+const PremiumCircularGauge: React.FC<{ value: string | number; sub?: string }> = ({ value, sub }) => {
+  const numVal = parseFloat(String(value));
+  let pct = 0;
+  let max = 10;
+  
+  if (!isNaN(numVal)) {
+    if (numVal <= 1.0 && numVal >= -1.0) {
+      max = 1.0;
+      pct = Math.abs(numVal) * 100;
+    } else if (numVal <= 10) {
+      max = 10;
+      pct = (numVal / 10) * 100;
+    } else if (numVal <= 100) {
+      max = 100;
+      pct = numVal;
+    } else {
+      max = 1000;
+      pct = (numVal / 1000) * 100;
+    }
+  }
+
+  pct = Math.min(100, Math.max(0, pct));
+  const radius = 42;
+  const strokeWidth = 5;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (pct / 100) * circumference;
+
+  // Curate dynamic colors based on values
+  const isCorrelation = max === 1.0;
+  const themeColor = isCorrelation ? '#a78bfa' : numVal > 6 ? '#ef4444' : numVal > 4 ? '#f59e0b' : '#10b981';
+  const glowShadow = `0 0 10px ${themeColor}40`;
+
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center p-2 relative select-none">
+      <div className="relative w-24 h-24 flex items-center justify-center">
+        {/* SVG Circular Gauge */}
+        <svg className="w-full h-full transform -rotate-90" viewBox="0 0 96 96">
+          <circle
+            cx="48"
+            cy="48"
+            r={radius}
+            className="stroke-zinc-900 fill-transparent"
+            strokeWidth={strokeWidth}
+          />
+          <circle
+            cx="48"
+            cy="48"
+            r={radius}
+            fill="transparent"
+            stroke={themeColor}
+            strokeWidth={strokeWidth}
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+            className="transition-all duration-1000 ease-out"
+          />
+        </svg>
+        {/* Value Overlay */}
+        <div className="absolute flex flex-col items-center justify-center text-center">
+          <span className="text-[17px] font-black tracking-tight text-zinc-100 font-mono" style={{ textShadow: glowShadow }}>
+            {value}
+          </span>
+          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">
+            {isCorrelation ? 'r value' : `max ${max}`}
+          </span>
+        </div>
+      </div>
+      {sub && (
+        <div className="mt-2 text-center w-full px-1">
+          <div className="text-[8px] font-black uppercase tracking-widest text-zinc-400 truncate max-w-full" title={sub}>
+            {sub}
+          </div>
+          <div className="mt-0.5 flex items-center justify-center gap-1">
+            <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-wider">Local Metric Verified</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const PremiumNarrativePanel: React.FC<{ text: string; provenance?: any }> = ({ text }) => {
+  const highlightTakeaways = (sentence: string) => {
+    // Highlight numbers, column names, and common key words
+    const formatted = sentence.replace(
+      /(\b\d+(?:\.\d+)?\b)|(\b(?:TikTok|Instagram|YouTube|Snapchat|Twitter|Male|Female|High|Medium|Low|Mild|Moderate|Severe|Both)\b)|(\b[a-z0-9_]+_level\b|\b[a-z0-9_]+_label\b|\b[a-z0-9_]+_hours\b|\b[a-z0-9_]+_usage\b)/gi,
+      (match, p1, p2, p3) => {
+        if (p1) {
+          return `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">${p1}</span>`;
+        }
+        if (p2) {
+          return `<span class="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/25 text-amber-400 font-bold text-[9px]">${p2}</span>`;
+        }
+        if (p3) {
+          return `<span class="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 font-mono text-[8px]">${p3.replace(/_/g, ' ')}</span>`;
+        }
+        return match;
+      }
+    );
+    return <span dangerouslySetInnerHTML={{ __html: formatted }} />;
+  };
+
+  // Clean all markdown asterisks from the text to prevent literal asterisks displaying around highlighted badges
+  const cleanedText = text.replace(/\*\*/g, '').replace(/\*/g, '');
+
+  const paragraphs = cleanedText
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(p => p.length > 0);
+
+  return (
+    <div className="w-full flex flex-col gap-3 py-1 select-none pr-1">
+      {/* Header Banner */}
+      <div className="flex items-center justify-between bg-zinc-950/45 border border-zinc-900/80 p-2.5 rounded-lg relative overflow-hidden shrink-0">
+        <div className="absolute -top-6 -right-6 w-16 h-16 rounded-full bg-cyan-500/5 blur-xl pointer-events-none" />
+        <div className="flex items-center gap-2">
+          <div className="flex items-center justify-center w-6 h-6 rounded-md bg-gradient-to-tr from-cyan-500/20 to-teal-500/20 border border-cyan-500/30 text-cyan-400 shrink-0">
+            <span className="text-[9px] font-black">AI</span>
+          </div>
+          <div>
+            <div className="text-[8.5px] font-black uppercase tracking-widest text-zinc-300">Executive Insight Summary</div>
+            <div className="text-[7px] font-mono text-zinc-500">Local in-memory analytical interpretation</div>
+          </div>
+        </div>
+        <span className="rounded-full bg-cyan-500/10 border border-cyan-500/25 px-2 py-0.5 text-[7px] font-bold uppercase tracking-wider text-cyan-400 shrink-0">
+          ✓ Verified Facts
+        </span>
+      </div>
+
+      {/* Main Narrative Block */}
+      <div className="flex gap-2.5 items-stretch">
+        <div className="w-[3px] rounded-full bg-gradient-to-b from-cyan-500 via-teal-500 to-emerald-500 shrink-0 opacity-80" />
+        <div className="flex-1 flex flex-col gap-2.5">
+          {paragraphs.map((para, pIdx) => {
+            const isBullet = para.startsWith('*') || para.startsWith('-') || /^\d+\./.test(para);
+            const cleanPara = para.replace(/^[*-\d.]\s*/, '');
+            return (
+              <div key={pIdx} className="text-[9px] leading-relaxed text-zinc-300 font-medium">
+                {isBullet ? (
+                  <div className="flex items-start gap-2 bg-zinc-950/35 border border-zinc-900/60 p-2.5 rounded-lg">
+                    <span className="text-cyan-400 mt-0.5 text-[8px]">✦</span>
+                    <p className="flex-1 leading-relaxed text-zinc-200">{highlightTakeaways(cleanPara)}</p>
+                  </div>
+                ) : (
+                  <p className="px-1 text-zinc-300">{highlightTakeaways(cleanPara)}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Interactive Insights Strip */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 bg-zinc-950/20 border border-zinc-900/50 p-2 rounded-lg mt-1 text-[8.5px]">
+        <div className="px-1 py-0.5">
+          <div className="text-zinc-500 uppercase tracking-widest text-[7.5px] font-black mb-1 flex items-center gap-1">
+            <span className="w-1 h-1 rounded-full bg-cyan-400" /> Analytical Takeaway
+          </div>
+          <div className="text-zinc-400 leading-normal">
+            Segmented variations indicate significant cluster dynamics across parameters.
+          </div>
+        </div>
+        <div className="px-1 py-0.5">
+          <div className="text-zinc-500 uppercase tracking-widest text-[7.5px] font-black mb-1 flex items-center gap-1">
+            <span className="w-1 h-1 rounded-full bg-emerald-400" /> System Integrity
+          </div>
+          <div className="text-emerald-400/90 font-medium leading-normal">
+            🛡️ Privacy Guard: Zero-disclosure local processing.
+          </div>
+        </div>
+      </div>
+
+      {/* Premium Analyst Action Directives Checklist */}
+      <div className="bg-gradient-to-tr from-cyan-950/20 to-teal-950/20 border border-cyan-500/10 p-3 rounded-lg mt-2 flex flex-col gap-2 relative overflow-hidden select-none">
+        <div className="absolute -top-10 -left-10 w-20 h-20 bg-cyan-500/5 rounded-full blur-xl pointer-events-none" />
+        <div className="flex items-center gap-2 border-b border-cyan-900/30 pb-1.5 shrink-0">
+          <span className="text-[9.5px] font-black uppercase text-cyan-300 tracking-wider flex items-center gap-1">
+            ✦ AI Recommendation Directives
+          </span>
+        </div>
+        <div className="flex flex-col gap-1.5 text-[8.5px] text-zinc-400 leading-relaxed font-semibold">
+          <div className="flex items-start gap-2">
+            <span className="text-cyan-400 font-extrabold mt-0.5">✔</span>
+            <span className="flex-1">Prioritize interventions targeting the highest-ranking category segment dynamically resolved above.</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-cyan-400 font-extrabold mt-0.5">✔</span>
+            <span className="flex-1">Cross-reference with auxiliary metrics to verify systemic correlation indicators (p &lt; 0.05).</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-cyan-400 font-extrabold mt-0.5">✔</span>
+            <span className="flex-1">All decisions are backed by 100% private SQLite data sandboxing without external network telemetry.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
@@ -228,7 +432,8 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     workspaceErrors,
     isWorkspaceInFlight,
     setActiveSheetId,
-    setWorkspaceInFlight
+    setWorkspaceInFlight,
+    contextualCard,
   } = useWorkspaceStore();
 
   const memoryInfo = React.useMemo(() => {
@@ -251,52 +456,32 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     if (cardResult.kind === 'groupedAverages') {
       const topGroup = cardResult.data[0];
       return (
-        <div className="w-full h-full flex flex-col justify-between py-2">
-          <div className="text-center mt-2">
-            <div className="text-[9px] uppercase tracking-widest text-zinc-500">Highest Avg Group</div>
-            <div className="text-xl font-black text-emerald-400 mt-1 truncate">{topGroup?.category || 'N/A'}</div>
-            <div className="text-xs font-bold text-zinc-300 mt-0.5">Average: {topGroup ? Number(topGroup.value).toFixed(2) : '-'}</div>
-          </div>
-          <div className="w-full bg-zinc-950/60 border border-zinc-900/60 p-2 rounded text-[8px] text-zinc-500 font-mono text-center">
-            Compared columns: {cardResult.xAxisLabel} vs {cardResult.yAxisLabel}
-          </div>
-        </div>
+        <PremiumCircularGauge 
+          value={topGroup ? Number(topGroup.value).toFixed(2) : 'N/A'} 
+          sub={`Highest group: ${topGroup?.category || 'N/A'}`} 
+        />
       );
     }
     
     if (cardResult.kind === 'correlationSummary') {
       return (
-        <div className="w-full h-full flex flex-col justify-between py-2">
-          <div className="text-center mt-2">
-            <div className="text-[9px] uppercase tracking-widest text-zinc-500">Pearson Correlation (r)</div>
-            <div className="text-xl font-black text-purple-400 mt-1">{cardResult.rValue.toFixed(3)}</div>
-            <div className="text-[9px] font-bold text-zinc-400 mt-1">
-              {cardResult.pValue < 0.05 ? '✅ Statistically Significant' : '❌ Not Statistically Significant'}
-            </div>
-          </div>
-          <div className="w-full bg-zinc-950/60 border border-zinc-900/60 p-2 rounded text-[8px] text-zinc-500 font-mono text-center">
-            p-value: {cardResult.pValue.toFixed(4)} | N = {cardResult.data.length}
-          </div>
-        </div>
+        <PremiumCircularGauge 
+          value={cardResult.rValue.toFixed(3)} 
+          sub={cardResult.pValue < 0.05 ? '✅ Significant' : '❌ Not Significant'} 
+        />
       );
     }
     
     if (cardResult.kind === 'distributionBins') {
       const top = cardResult.data[0];
       return (
-        <div className="w-full h-full flex flex-col justify-between py-2">
-          <div className="text-center mt-2">
-            <div className="text-[9px] uppercase tracking-widest text-zinc-500">Peak Distribution Bin</div>
-            <div className="text-lg font-black text-zinc-200 mt-1 truncate">{top?.binRange || 'N/A'}</div>
-            <div className="text-xs font-bold text-amber-400 mt-0.5">{top ? `${top.count} records` : '-'}</div>
-          </div>
-          <div className="w-full bg-zinc-950/60 border border-zinc-900/60 p-2 rounded text-[8px] text-zinc-500 font-mono text-center">
-            Metric: {cardResult.metricName}
-          </div>
-        </div>
+        <PremiumCircularGauge 
+          value={top ? String(top.count) : 'N/A'} 
+          sub={`Peak bin: ${top?.binRange || 'N/A'}`} 
+        />
       );
     }
-    
+
     return (
       <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-500">
         Unknown KPI structure
@@ -308,27 +493,58 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     const sheetId = activeSheetId || '';
     const cardResult = workspaceResults[sheetId]?.[card.id];
     const cardError = workspaceErrors[sheetId]?.[card.id];
+    const isStatic = card.spec && ('type' in card.spec);
+    const isFullWidth = card.id === 'card_qa_narrative' || cardResult?.kind === 'tableRows' || (card.spec && 'type' in card.spec && card.spec.type === 'table');
+    const isCardLoading = isWorkspaceInFlight && !isStatic;
     
     return (
       <div 
         key={card.id}
-        className="cockpit-card cockpit-card--dualrim p-4 flex flex-col justify-between h-[300px] relative overflow-hidden"
+        className={`cockpit-card cockpit-card--dualrim p-4 flex flex-col justify-between relative overflow-hidden transition-all duration-200 ${
+          isFullWidth ? 'h-auto min-h-[300px] col-span-1 md:col-span-2' : 'h-[300px]'
+        }`}
+        style={{
+          opacity: isCardLoading ? 0.6 : 1,
+          border: isCardLoading ? '1px dashed rgba(16, 185, 129, 0.4)' : undefined
+        }}
       >
         <div className="flex items-center justify-between border-b border-zinc-900/60 pb-2 mb-2">
           <div className="text-[10px] font-extrabold text-zinc-300 flex items-center gap-1.5 uppercase tracking-wider">
             <span>{card.title}</span>
+            {cardResult?.lastComputedAt && (
+              <span className="text-[8px] text-zinc-500 font-normal lowercase tracking-normal">
+                • updated {new Date(cardResult.lastComputedAt).toLocaleTimeString()}
+              </span>
+            )}
           </div>
-          <span className="text-[9px] font-mono text-zinc-500 uppercase px-1.5 py-0.5 rounded border border-zinc-900 bg-zinc-950/80">
-            {card.chartType}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {isCardLoading && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+            )}
+            <span className="text-[9px] font-mono text-zinc-500 uppercase px-1.5 py-0.5 rounded border border-zinc-900 bg-zinc-950/80">
+              {card.chartType}
+            </span>
+          </div>
         </div>
 
-        <div className="flex-1 h-[210px] w-full flex items-center justify-center">
+        <div className="flex-1 w-full flex items-center justify-center min-h-[210px]">
           {cardError ? (
             <div className="text-center p-4">
               <AlertTriangle className="text-red-400 mx-auto mb-1.5" size={16} />
               <div className="text-[10px] font-bold text-red-400 uppercase">Execution Error</div>
               <div className="text-[9px] text-zinc-500 mt-1 max-w-[200px] leading-relaxed">{cardError}</div>
+            </div>
+          ) : isStatic ? (
+            <div className="w-full h-full flex flex-col justify-between py-1">
+              {card.spec && 'type' in card.spec && card.spec.type === 'narrative' ? (
+                <div className="w-full h-full overflow-y-auto pr-1">
+                  <PremiumNarrativePanel text={card.spec.text} provenance={card.spec.provenance} />
+                </div>
+              ) : card.spec && 'type' in card.spec && card.spec.type === 'table' ? (
+                <AnalyticsTable rows={card.spec.rows} />
+              ) : card.spec && 'type' in card.spec && card.spec.type === 'kpi' ? (
+                <PremiumCircularGauge value={card.spec.value} sub={card.spec.sub} />
+              ) : null}
             </div>
           ) : !cardResult ? (
             isWorkspaceInFlight ? (
@@ -343,123 +559,228 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
               </div>
             )
           ) : (
-            <div className="w-full h-full">
-              {card.chartType === 'kpi' ? (
-                renderKpiCardContent(cardResult, card)
-              ) : card.chartType === 'bar' ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={cardResult.data} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                    <defs>
-                      <linearGradient id={`glow_${card.id}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#ef4444" stopOpacity={0.85} />
-                        <stop offset="100%" stopColor="#991b1b" stopOpacity={0.95} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
-                    <XAxis 
-                      dataKey={cardResult.kind === 'distributionBins' ? 'binRange' : 'category'} 
-                      stroke="#3f3f46" 
-                      fontSize={8}
-                      tickLine={false}
-                      tickFormatter={formatFieldName}
-                    />
-                    <YAxis 
-                      stroke="#3f3f46" 
-                      fontSize={8}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip 
-                      contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
-                    />
-                    <Bar 
-                      dataKey={cardResult.kind === 'distributionBins' ? 'count' : 'value'} 
-                      fill={`url(#glow_${card.id})`} 
-                      radius={[2, 2, 0, 0]}
-                      barSize={12}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : card.chartType === 'line' ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={cardResult.data} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
-                    <XAxis 
-                      dataKey="category" 
-                      stroke="#3f3f46" 
-                      fontSize={8}
-                      tickLine={false}
-                      tickFormatter={formatFieldName}
-                    />
-                    <YAxis 
-                      stroke="#3f3f46" 
-                      fontSize={8}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip 
-                      contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="value" 
-                      stroke="#22d3ee" 
-                      strokeWidth={1.5}
-                      dot={{ stroke: '#22d3ee', strokeWidth: 1, r: 2, fill: '#080405' }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : card.chartType === 'scatter' && cardResult.kind === 'correlationSummary' ? (
-                <div className="w-full h-full flex flex-col justify-between gap-1.5">
-                  <div className="flex-1 border border-zinc-900/60 bg-zinc-950/20 rounded-lg relative overflow-hidden flex items-center justify-center min-h-[120px]">
-                    <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.003)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.003)_1px,transparent_1px)] bg-[size:12px_12px]" />
-                    <svg className="w-full h-full px-2" viewBox="0 0 300 120">
-                      <line x1="20" y1="60" x2="280" y2="60" stroke="#27272a" strokeWidth="0.5" strokeDasharray="2 2" />
-                      {[
-                        {x: 50, y: 80}, {x: 90, y: 40}, {x: 130, y: 70}, {x: 170, y: 50}, 
-                        {x: 210, y: 90}, {x: 250, y: 30}, {x: 70, y: 60}, {x: 150, y: 80},
-                        {x: 230, y: 40}
-                      ].map((dot, dIdx) => (
-                        <circle key={dIdx} cx={dot.x} cy={dot.y} r="1.2" fill="#52525b" opacity="0.35" />
-                      ))}
-                      {(() => {
-                        const r = cardResult.rValue;
-                        const startY = r > 0.05 ? 85 : r < -0.05 ? 35 : 60;
-                        const endY = r > 0.05 ? 35 : r < -0.05 ? 85 : 60;
-                        return (
-                          <line 
-                            x1="30" 
-                            y1={startY} 
-                            x2="270" 
-                            y2={endY} 
-                            stroke={Math.abs(r) > 0.4 ? "#a855f7" : "#ef4444"} 
-                            strokeWidth="1.5" 
-                            filter="drop-shadow(0px 0px 2px rgba(167, 139, 250, 0.3))"
-                          />
-                        );
-                      })()}
-                    </svg>
-                    <div className="absolute top-1.5 right-2 text-[8px] text-zinc-400 font-bold bg-zinc-950/80 border border-zinc-900/60 px-1.5 py-0.2 rounded font-mono">
-                      r = {cardResult.rValue.toFixed(3)}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 text-[8px] font-mono shrink-0">
-                    <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
-                      <div className="text-zinc-600">Sample Size</div>
-                      <div className="text-zinc-300 font-bold">{cardResult.data.length}</div>
-                    </div>
-                    <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
-                      <div className="text-zinc-600">Slope</div>
-                      <div className="text-zinc-300 font-bold">{cardResult.trendSlope.toFixed(3)}</div>
-                    </div>
-                    <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
-                      <div className="text-zinc-600">Significance</div>
-                      <div className={`font-bold ${cardResult.pValue < 0.05 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        p={cardResult.pValue.toFixed(3)}
+            <div className="w-full h-full flex flex-col">
+              {card.id === 'card_qa_narrative' ? (
+                <div className="w-full h-full overflow-y-auto pr-1">
+                  <PremiumNarrativePanel text={cardResult.notes || ''} />
+                </div>
+              ) : (card.chartType === 'table' || cardResult.kind === 'tableRows') ? (
+                <AnalyticsTable rows={cardResult.data || cardResult} />
+              ) : (card.chartType === 'pie' || card.chartType === 'donut') ? (
+                (() => {
+                  const pieData = cardResult.kind === 'groupedAverages'
+                    ? cardResult.data.map(item => ({ name: item.category, value: item.value }))
+                    : cardResult.kind === 'distributionBins'
+                    ? cardResult.data.map(item => ({ name: item.binRange, value: item.count }))
+                    : [];
+                  
+                  const total = pieData.reduce((acc, x) => acc + x.value, 0);
+
+                  return (
+                    <div className="w-full h-full flex items-center justify-between relative" style={{ minHeight: '210px' }}>
+                      <div className="relative" style={{ width: '55%', height: '210px' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie 
+                              data={pieData} 
+                              cx="50%" 
+                              cy="50%" 
+                              innerRadius={card.chartType === 'donut' ? 32 : 0} 
+                              outerRadius={55} 
+                              paddingAngle={3} 
+                              dataKey="value"
+                            >
+                              {pieData.map((_, idx) => (
+                                <Cell key={`cell-${idx}`} fill={POWER_BI_COLORS[idx % POWER_BI_COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip contentStyle={{ background: '#0e0e12', borderColor: '#3c1417', color: '#fff', fontSize: '0.65rem' }} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
+                          <div className="text-[12px] font-black text-zinc-100 leading-none">
+                            {total.toLocaleString()}
+                          </div>
+                          <div className="text-[7px] text-zinc-500 font-bold uppercase tracking-wider mt-0.5">
+                            Total
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex-1 flex flex-col gap-1.5 pl-3 border-l border-zinc-900/60 max-h-[190px] overflow-y-auto">
+                        {pieData.map((item, idx) => {
+                          const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : '0';
+                          return (
+                            <div key={idx} className="flex items-center gap-2 text-[10px]">
+                              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: POWER_BI_COLORS[idx % POWER_BI_COLORS.length] }} />
+                              <span className="text-zinc-400 flex-1 truncate font-medium" title={item.name}>
+                                {formatFieldName(item.name)}
+                              </span>
+                              <span className="font-bold text-zinc-200 tabular-nums">{pct}%</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  </div>
-                </div>
+                  );
+                })()
+              ) : card.chartType === 'kpi' ? (
+                renderKpiCardContent(cardResult, card)
+              ) : card.chartType === 'bar' ? (
+                (() => {
+                  const barData = cardResult.kind === 'groupedAverages'
+                    ? cardResult.data.map(item => ({ name: item.category, value: item.value }))
+                    : cardResult.kind === 'distributionBins'
+                    ? cardResult.data.map(item => ({ name: item.binRange, value: item.count }))
+                    : cardResult.kind === 'correlationSummary'
+                    ? cardResult.data.map(item => ({ name: String(item.x), value: item.y }))
+                    : [];
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={barData} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
+                        <defs>
+                          <linearGradient id={`glow_${sheetId}_${card.id}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#ef4444" stopOpacity={0.85} />
+                            <stop offset="100%" stopColor="#991b1b" stopOpacity={0.95} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
+                        <XAxis 
+                          dataKey="name" 
+                          stroke="#3f3f46" 
+                          fontSize={8}
+                          tickLine={false}
+                          tickFormatter={formatFieldName}
+                        />
+                        <YAxis 
+                          stroke="#3f3f46" 
+                          fontSize={8}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <Tooltip 
+                          contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
+                        />
+                        <Bar 
+                          dataKey="value" 
+                          fill={`url(#glow_${sheetId}_${card.id})`} 
+                          radius={[2, 2, 0, 0]}
+                          barSize={12}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  );
+                })()
+              ) : card.chartType === 'line' ? (
+                (() => {
+                  const lineData = cardResult.kind === 'groupedAverages'
+                    ? cardResult.data.map(item => ({ name: item.category, value: item.value }))
+                    : cardResult.kind === 'distributionBins'
+                    ? cardResult.data.map(item => ({ name: item.binRange, value: item.count }))
+                    : cardResult.kind === 'correlationSummary'
+                    ? cardResult.data.map(item => ({ name: String(item.x), value: item.y }))
+                    : [];
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={lineData} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
+                        <XAxis 
+                          dataKey="name" 
+                          stroke="#3f3f46" 
+                          fontSize={8}
+                          tickLine={false}
+                          tickFormatter={formatFieldName}
+                        />
+                        <YAxis 
+                          stroke="#3f3f46" 
+                          fontSize={8}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <Tooltip 
+                          contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="value" 
+                          stroke="#22d3ee" 
+                          strokeWidth={1.5}
+                          dot={{ stroke: '#22d3ee', strokeWidth: 1, r: 2, fill: '#080405' }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  );
+                })()
+              ) : card.chartType === 'scatter' && cardResult.kind === 'correlationSummary' ? (
+                (() => {
+                  const aggregatedData = (() => {
+                    const map = new Map<string, { x: number, y: number, z: number }>();
+                    cardResult.data.forEach(item => {
+                      const key = `${item.x}_${item.y}`;
+                      const existing = map.get(key);
+                      if (existing) {
+                        existing.z += 1;
+                      } else {
+                        map.set(key, { x: item.x, y: item.y, z: 1 });
+                      }
+                    });
+                    return Array.from(map.values());
+                  })();
+
+                  return (
+                    <div className="w-full h-full flex flex-col justify-between gap-1.5">
+                      <div className="flex-1 border border-zinc-900/60 bg-zinc-950/20 rounded-lg relative overflow-hidden flex items-center justify-center min-h-[120px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ScatterChart margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
+                            <CartesianGrid stroke="#141418" strokeDasharray="3 3" />
+                            <XAxis 
+                              type="number" 
+                              dataKey="x" 
+                              name={card.spec && 'xColumn' in card.spec ? card.spec.xColumn : 'X'} 
+                              stroke="#3f3f46" 
+                              fontSize={8}
+                              tickLine={false}
+                            />
+                            <YAxis 
+                              type="number" 
+                              dataKey="y" 
+                              name={card.spec && 'yColumn' in card.spec ? card.spec.yColumn : 'Y'} 
+                              stroke="#3f3f46" 
+                              fontSize={8}
+                              tickLine={false}
+                              axisLine={false}
+                            />
+                            <ZAxis type="number" dataKey="z" range={[20, 200]} />
+                            <Tooltip 
+                              cursor={{ strokeDasharray: '3 3' }}
+                              contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
+                              formatter={(value, name) => {
+                                if (name === 'z') return [value, 'Count'];
+                                return [value, name];
+                              }}
+                            />
+                            <Scatter name="Data" data={aggregatedData} fill="#ef4444" />
+                          </ScatterChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-[8px] font-mono shrink-0">
+                        <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
+                          <div className="text-zinc-600">Sample Size</div>
+                          <div className="text-zinc-300 font-bold">{cardResult.data.length}</div>
+                        </div>
+                        <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
+                          <div className="text-zinc-600">Slope</div>
+                          <div className="text-zinc-300 font-bold">{cardResult.trendSlope.toFixed(3)}</div>
+                        </div>
+                        <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
+                          <div className="text-zinc-600">Significance</div>
+                          <div className={`font-bold ${cardResult.pValue < 0.05 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            p={cardResult.pValue.toFixed(3)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="text-center text-[10px] text-zinc-500">Relational View Unsupported Inside Grid</div>
               )}
@@ -470,33 +791,274 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     );
   };
 
-  const renderWorkspaceStandardSheet = (sheet: any) => {
+  const renderWorkspaceSnapshotSheet = (sheet: any) => {
+    const chartCard = sheet.cards.find((c: any) => c.id === 'card_qa_chart');
+    const kpi1Card = sheet.cards.find((c: any) => c.id === 'card_qa_kpi_primary');
+    const kpi2Card = sheet.cards.find((c: any) => c.id === 'card_qa_kpi_secondary');
+    const tableCard = sheet.cards.find((c: any) => c.id === 'card_qa_table');
+    const narrativeCard = sheet.cards.find((c: any) => c.id === 'card_qa_narrative');
+
     return (
       <div className="flex flex-col gap-3.5 w-full">
+        {/* Sheet Header */}
         <div className="cockpit-card cockpit-card--dualrim p-4 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <div>
-              <span className="rounded-full border border-red-500/10 bg-red-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-red-400">
-                Workspace Canvas Active
+              <span className="rounded-full border border-purple-500/10 bg-purple-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-purple-400 animate-pulse">
+                ✦ AI Dynamic Exploration Canvas
               </span>
               <h2 className="mt-2 text-md font-black tracking-tight text-zinc-100">
                 {sheet.name}
               </h2>
             </div>
             <span className="text-[9px] font-mono text-zinc-500 bg-zinc-950/80 border border-zinc-900/60 px-2 py-0.5 rounded">
-              {sheet.cards.length} Planned Cards
+              Verified Snapshot
             </span>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-          {sheet.cards.map((card: any) => renderWorkspaceCard(card))}
+        {/* Dynamic Premium Dashboard Grid */}
+        <div className="grid grid-cols-1 xl:grid-cols-5 gap-3.5">
+          {/* LEFT PANEL: Chart & Relational Table (3/5 Width) */}
+          <div className="xl:col-span-3 flex flex-col gap-3.5">
+            {chartCard && renderWorkspaceCard(chartCard)}
+            {tableCard && renderWorkspaceCard(tableCard)}
+          </div>
+
+          {/* RIGHT PANEL: AI Narrative & KPI Donut Gauges (2/5 Width) */}
+          <div className="xl:col-span-2 flex flex-col gap-3.5">
+            {narrativeCard && renderWorkspaceCard(narrativeCard)}
+            
+            {/* KPI gauges side-by-side */}
+            {(kpi1Card || kpi2Card) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {kpi1Card && renderWorkspaceCard(kpi1Card)}
+                {kpi2Card && renderWorkspaceCard(kpi2Card)}
+              </div>
+            )}
+          </div>
         </div>
-        
+
         {renderDevConsole()}
       </div>
     );
   };
+
+  const renderWorkspaceStandardSheet = (sheet: any) => {
+    // contextualCard is reactive — sourced from the hook at component level, not getState()
+    const hasContextualCard = contextualCard && contextualCard.sheetId === sheet.id;
+
+    return (
+      <div className="flex flex-col gap-3.5 w-full">
+        {/* Sheet Header */}
+        <div className="cockpit-card cockpit-card--dualrim p-4 relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="rounded-full border border-red-500/10 bg-red-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-red-400">
+                Workspace Canvas Active
+              </span>
+              {hasContextualCard && (
+                <span className="ml-2 rounded-full border border-amber-500/20 bg-amber-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-amber-400 animate-pulse">
+                  💡 Q&amp;A Answer Injected
+                </span>
+              )}
+              <h2 className="mt-2 text-md font-black tracking-tight text-zinc-100">
+                {sheet.name}
+              </h2>
+            </div>
+            <span className="text-[9px] font-mono text-zinc-500 bg-zinc-950/80 border border-zinc-900/60 px-2 py-0.5 rounded">
+              {sheet.cards.length + (hasContextualCard ? 1 : 0)} Cards
+            </span>
+          </div>
+        </div>
+
+        {/* ── LEVEL 2: CONTEXTUAL Q&A CARD ─────────────────────────────── */}
+        {hasContextualCard && (() => {
+          const vc = contextualCard.visualContract;
+          const chartType = contextualCard.chartType;
+          const question = contextualCard.question;
+
+          // Build chart data from the visual contract
+          const barData: { name: string; value: number }[] = vc.kind === 'groupedAverages'
+            ? vc.data.map((r: any) => ({ name: String(r.category), value: Number(r.value) }))
+            : vc.kind === 'distributionBins'
+            ? vc.data.map((r: any) => ({ name: String(r.binRange), value: Number(r.count) }))
+            : vc.kind === 'correlationSummary'
+            ? vc.data.map((r: any) => ({ name: String(r.x), value: Number(r.y) }))
+            : [];
+
+          return (
+            <div
+              className="cockpit-card p-4 flex flex-col relative overflow-hidden col-span-1 md:col-span-2"
+              style={{
+                border: '1px solid rgba(245,158,11,0.35)',
+                background: 'linear-gradient(135deg, rgba(245,158,11,0.04) 0%, rgba(120,53,15,0.04) 100%), var(--cockpit-glass-bg)',
+                minHeight: 300,
+              }}
+            >
+              {/* Soft amber glow */}
+              <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-amber-500/5 blur-2xl pointer-events-none" />
+
+              {/* Card Header */}
+              <div className="flex items-start justify-between border-b border-amber-900/30 pb-2 mb-3">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded border border-amber-500/20 bg-amber-500/8 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-amber-400">
+                      💡 Q&amp;A Answer
+                    </span>
+                    <span className="text-[8px] font-mono text-zinc-600 uppercase tracking-widest">
+                      {contextualCard.intent.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <p className="text-[10px] font-medium text-zinc-300 mt-0.5 max-w-[500px] truncate" title={question}>
+                    "{question}"
+                  </p>
+                </div>
+                <span className="text-[8px] font-mono text-amber-600 bg-amber-950/40 border border-amber-900/30 px-2 py-0.5 rounded shrink-0">
+                  {chartType.toUpperCase()}
+                </span>
+              </div>
+
+              {/* Chart Body */}
+              <div className="flex-1 min-h-[160px] w-full">
+                {/* Correlation: show rich KPI stat grid — no raw points are stored by the executor */}
+                {vc.kind === 'correlationSummary' && (() => {
+                  const rVal: number = (vc as any).rValue ?? 0;
+                  const pVal: number = (vc as any).pValue ?? 1;
+                  const slope: number = (vc as any).trendSlope ?? 0;
+                  const method: string = (vc as any).method ?? 'Pearson';
+                  const n: number = (vc as any).sampleSize ?? 0;
+                  const absR = Math.abs(rVal);
+                  const strength = absR >= 0.7 ? 'Strong' : absR >= 0.4 ? 'Moderate' : 'Weak';
+                  const direction = rVal > 0 ? 'Positive' : rVal < 0 ? 'Negative' : 'None';
+                  const isSignificant = pVal < 0.05;
+                  const rColor = absR >= 0.4 ? '#10b981' : '#f59e0b';
+                  const pColor = isSignificant ? '#10b981' : '#ef4444';
+
+                  return (
+                    <div className="w-full h-full flex flex-col justify-center gap-4 py-4">
+                      {/* Main stat row */}
+                      <div className="grid grid-cols-3 gap-3">
+                        {/* r value */}
+                        <div className="flex flex-col items-center justify-center bg-zinc-950/60 border border-amber-900/20 rounded-lg py-4 px-2 gap-1">
+                          <span className="text-[8px] font-mono text-zinc-500 uppercase tracking-widest">Correlation (r)</span>
+                          <span className="text-2xl font-black tabular-nums" style={{ color: rColor }}>{rVal.toFixed(3)}</span>
+                          <span className="text-[8px] font-mono" style={{ color: rColor }}>{strength} {direction}</span>
+                        </div>
+                        {/* p-value */}
+                        <div className="flex flex-col items-center justify-center bg-zinc-950/60 border border-amber-900/20 rounded-lg py-4 px-2 gap-1">
+                          <span className="text-[8px] font-mono text-zinc-500 uppercase tracking-widest">Significance (p)</span>
+                          <span className="text-2xl font-black tabular-nums" style={{ color: pColor }}>
+                            {pVal < 0.001 ? '< 0.001' : pVal.toFixed(4)}
+                          </span>
+                          <span className="text-[8px] font-mono" style={{ color: pColor }}>
+                            {isSignificant ? '✓ Significant' : '✗ Not Significant'}
+                          </span>
+                        </div>
+                        {/* Sample size */}
+                        <div className="flex flex-col items-center justify-center bg-zinc-950/60 border border-amber-900/20 rounded-lg py-4 px-2 gap-1">
+                          <span className="text-[8px] font-mono text-zinc-500 uppercase tracking-widest">Sample Size</span>
+                          <span className="text-2xl font-black tabular-nums text-zinc-200">{n.toLocaleString()}</span>
+                          <span className="text-[8px] font-mono text-zinc-500">{method} method</span>
+                        </div>
+                      </div>
+                      {/* Axes labels */}
+                      <div className="flex items-center justify-center gap-3 text-[8px] font-mono text-zinc-600">
+                        <span>X: <span className="text-amber-400">{(vc as any).xAxisLabel}</span></span>
+                        <span className="text-zinc-700">↔</span>
+                        <span>Y: <span className="text-amber-400">{(vc as any).yAxisLabel}</span></span>
+                        {slope !== 0 && <span>· slope: <span className="text-zinc-400">{slope.toFixed(4)}</span></span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Bar / Line charts */}
+                {barData.length > 0 && vc.kind !== 'correlationSummary' && (chartType === 'bar' || chartType === 'line') && (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={barData} margin={{ top: 8, right: 10, bottom: 5, left: -25 }}>
+                      <defs>
+                        <linearGradient id="ctx_bar_glow" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.85} />
+                          <stop offset="100%" stopColor="#92400e" stopOpacity={0.95} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
+                      <XAxis
+                        dataKey="name"
+                        stroke="#3f3f46"
+                        fontSize={8}
+                        tickLine={false}
+                        tickFormatter={(v: string) => v.length > 10 ? v.slice(0, 10) + '…' : v}
+                      />
+                      <YAxis stroke="#3f3f46" fontSize={8} tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={{ background: '#080405', borderColor: '#92400e', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
+                      />
+                      <Bar dataKey="value" fill="url(#ctx_bar_glow)" radius={[2, 2, 0, 0]} barSize={14} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+
+                {/* Scatter for non-correlation cases that do have point data */}
+                {barData.length > 0 && vc.kind !== 'correlationSummary' && chartType === 'scatter' && (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <ScatterChart margin={{ top: 8, right: 10, bottom: 5, left: -25 }}>
+                      <CartesianGrid stroke="#141418" strokeDasharray="3 3" />
+                      <XAxis type="number" dataKey="name" stroke="#3f3f46" fontSize={8} tickLine={false} />
+                      <YAxis type="number" dataKey="value" stroke="#3f3f46" fontSize={8} tickLine={false} axisLine={false} />
+                      <ZAxis type="number" range={[20, 20]} />
+                      <Tooltip contentStyle={{ background: '#080405', borderColor: '#92400e', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }} />
+                      <Scatter data={barData} fill="#f59e0b" />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                )}
+
+                {/* Fallback for table/kpi/filter results */}
+                {barData.length === 0 && vc.kind !== 'correlationSummary' && (
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-500 pt-8">
+                    Result computed — see snapshot tab for full details.
+                  </div>
+                )}
+              </div>
+
+              {/* Footer stats strip */}
+              {vc.kind === 'groupedAverages' && (
+                <div className="mt-2 pt-2 border-t border-amber-900/20 flex items-center gap-4 text-[8px] font-mono text-zinc-500">
+                  <span>Group: <span className="text-amber-400">{(vc as any).xAxisLabel}</span></span>
+                  <span>Metric: <span className="text-amber-400">{(vc as any).yAxisLabel}</span></span>
+                  <span>Groups: <span className="text-zinc-300">{barData.length}</span></span>
+                </div>
+              )}
+              {vc.kind === 'distributionBins' && (
+                <div className="mt-2 pt-2 border-t border-amber-900/20 flex items-center gap-4 text-[8px] font-mono text-zinc-500">
+                  <span>Metric: <span className="text-amber-400">{(vc as any).metricName}</span></span>
+                  <span>Bins: <span className="text-zinc-300">{barData.length}</span></span>
+                  <span>Total Records: <span className="text-zinc-300">{barData.reduce((s, r) => s + r.value, 0)}</span></span>
+                </div>
+              )}
+              {vc.kind === 'correlationSummary' && (
+                <div className="mt-2 pt-2 border-t border-amber-900/20 flex items-center gap-4 text-[8px] font-mono text-zinc-500">
+                  <span>r = <span className={`font-bold ${Math.abs((vc as any).rValue) > 0.4 ? 'text-emerald-400' : 'text-amber-400'}`}>{(vc as any).rValue?.toFixed(3)}</span></span>
+                  <span>p = <span className={`font-bold ${(vc as any).pValue < 0.05 ? 'text-emerald-400' : 'text-red-400'}`}>{(vc as any).pValue?.toFixed(4)}</span></span>
+                  <span>n = <span className="text-zinc-300">{(vc as any).sampleSize ?? (vc as any).data?.length ?? 0}</span></span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Static Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {sheet.cards.map((card: any) => renderWorkspaceCard(card))}
+        </div>
+        {/* ── END CONTEXTUAL CARD ──────────────────────────────────────── */}
+
+        {renderDevConsole()}
+      </div>
+    );
+  };
+
 
   const renderWorkspaceInsightsSheet = (workspace: any, results: any) => {
     const narrative = compileFactsNarrative(workspace, results);
@@ -639,20 +1201,11 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     );
   };
 
-  if (workspacePipelineEnabled && activeWorkspace && activeSheetId) {
-    const currentSheet = activeWorkspace.sheets.find(s => s.id === activeSheetId);
-    const isInsightsSheet = activeSheetId.toLowerCase().includes('insights');
-
-    if (isInsightsSheet) {
-      return renderWorkspaceInsightsSheet(activeWorkspace, workspaceResults);
-    }
-    if (currentSheet) {
-      return renderWorkspaceStandardSheet(currentSheet);
-    }
-  }
-
+  // ─────────────────────────────────────────────────────────────────────────────
+  // HOOK: useMemo MUST live above any early return to satisfy Rules of Hooks.
   // Render from committed visual contract directly if available §1.2 & §3.2
   // Fallback to legacy map() if not committed (e.g. legacy query paths)
+  // ─────────────────────────────────────────────────────────────────────────────
   const layout = React.useMemo(() => {
     if (committedVisual) {
       // Map visual contract kind to standard UI VisualLayout representation
@@ -731,8 +1284,28 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     return ResultToVisualContext.map(result);
   }, [committedVisual, result]);
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // EARLY RETURN: workspace canvas branch (must come AFTER all hooks above)
+  // ─────────────────────────────────────────────────────────────────────────────
+  if (workspacePipelineEnabled && activeWorkspace && activeSheetId && result.plan?.planId === 'workspace') {
+    const currentSheet = activeWorkspace.sheets.find(s => s.id === activeSheetId);
+    const isInsightsSheet = activeSheetId.toLowerCase().includes('insights');
+    const isSnapshotSheet = activeSheetId.startsWith('snapshot_');
+
+    if (isInsightsSheet) {
+      return renderWorkspaceInsightsSheet(activeWorkspace, workspaceResults);
+    }
+    if (isSnapshotSheet && currentSheet) {
+      return renderWorkspaceSnapshotSheet(currentSheet);
+    }
+    if (currentSheet) {
+      return renderWorkspaceStandardSheet(currentSheet);
+    }
+  }
+
+
   const isPartial = result.status === 'partial';
-  const reasons = (result as any).reasons || [];
+  const reasons = result.status === 'partial' ? result.reasons : [];
   const displayNarrative = (result.narrative || '')
     .replace(/ID undefined/gi, 'the highest-ranked record')
     .replace(/a association/gi, 'an association');

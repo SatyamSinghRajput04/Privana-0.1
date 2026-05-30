@@ -90,26 +90,16 @@ export const DatasetValidator = {
       }
     }
 
-    if (isMetadataShape) {
-      return {
-        datasetHash,
-        rowCount: rows.length,
-        columnCount: columnsCount,
-        shape: 'metadata',
-        columns: [],
-        qualityMetrics: { missingValuesPct: 0, duplicatesCount: 0, criticalIssuesCount: 1, criticalIssues: ['File is structured as metadata descriptors rather than tabular rows'] },
-        piiFlags: [],
-        profiledAt,
-        profilerVersion
-      };
-    }
-
     // 3. Columns Analysis
     const columnProfiles: ColumnProfile[] = [];
     const piiFlags: PiiFlag[] = [];
     const criticalIssues: string[] = [];
     let totalCells = 0;
     let nullCells = 0;
+
+    if (isMetadataShape) {
+      criticalIssues.push('File is structured as metadata descriptors rather than tabular rows');
+    }
 
     // Common PII Header keywords
     const piiNameKeywords = ['name', 'full_name', 'firstname', 'lastname', 'owner', 'student_name', 'employee_name'];
@@ -248,7 +238,7 @@ export const DatasetValidator = {
       datasetHash,
       rowCount: rows.length,
       columnCount: columnsCount,
-      shape: 'tabular',
+      shape: isMetadataShape ? 'metadata' : 'tabular',
       columns: columnProfiles,
       qualityMetrics,
       piiFlags,

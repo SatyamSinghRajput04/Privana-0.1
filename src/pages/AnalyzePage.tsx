@@ -19,7 +19,7 @@ import { planWorkspace, executeWorkspaceActiveTab } from '../domain/analytics/wo
 import { 
   Moon, Users, Heart, Database, Search, Filter, Save, Layers, ChevronRight, 
   Menu, Info, Star, ShieldAlert, Sparkles, FolderClosed, RefreshCw, TrendingUp,
-  Send, X, MessageSquare
+  Send, X, MessageSquare, ArrowRight
 } from 'lucide-react';
 import { isFlagOn } from '../lib/flags';
 import { DatasetValidator } from '../domain/validator/validator';
@@ -29,6 +29,9 @@ import { ResultView } from '../domain/analytics/features/result-view/ResultView'
 import { PlanPreview } from '../domain/analytics/features/plan-preview/PlanPreview';
 import { QueryReadyState } from '../domain/analytics/features/query-ready/QueryReadyState';
 import { EvalLogger } from '../domain/analytics/evalLogger';
+import { AnalyticsResult } from '../domain/analytics/types';
+import { matchResultToSheet } from '../lib/matchResultToSheet';
+import { mapToVisualContract } from '../domain/analytics/resultToVisualContext';
 
 // ---------------------------------------------------------------------------
 // Self-contained Markdown renderer â€” no external deps.
@@ -241,15 +244,346 @@ interface P {
 
 const COLORS = ['#eab308', '#3b82f6', '#ef4444', '#a855f7', '#f97316', '#06b6d4'];
 
+// Standalone local-state search bar to completely eliminate typing lag
+interface QuerySearchBarProps {
+  qaLoading: boolean;
+  hasResponse: boolean;
+  hasContextualCard: boolean;
+  onSearch: (query: string) => void;
+  onReset: () => void;
+  qaInput: string;
+  setQaInput: (val: string) => void;
+}
+
+const QuerySearchBar: React.FC<QuerySearchBarProps> = ({
+  qaLoading,
+  hasResponse,
+  hasContextualCard,
+  onSearch,
+  onReset,
+  qaInput,
+  setQaInput
+}) => {
+  const [localVal, setLocalVal] = useState(qaInput);
+
+  useEffect(() => {
+    setLocalVal(qaInput);
+  }, [qaInput]);
+
+  const handleSearchSubmit = () => {
+    const trimmed = localVal.trim();
+    if (trimmed) {
+      setQaInput(trimmed);
+      onSearch(trimmed);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: '0.55rem', flex: 1 }}>
+      <div style={{ flex: 1, position: 'relative' }}>
+        <Search size={13} style={{ position: 'absolute', left: 10, top: 9.5, color: '#52525b' }} />
+        <input
+          type="text"
+          placeholder="e.g., average sleep hours for female TikTok users aged 14 to 16..."
+          value={localVal}
+          onChange={(e) => setLocalVal(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSearchSubmit(); }}
+          style={{
+            width: '100%',
+            height: '32px',
+            background: '#080405',
+            border: '1.5px solid var(--rim)',
+            borderRadius: '8px',
+            paddingLeft: '2.1rem',
+            paddingRight: '1rem',
+            fontSize: '0.75rem',
+            color: '#fff',
+            outline: 'none',
+            transition: 'border-color 0.15s'
+          }}
+          onFocus={(e) => e.target.style.borderColor = '#ef4444'}
+          onBlur={(e) => e.target.style.borderColor = 'var(--rim)'}
+        />
+      </div>
+      
+      <button
+        onClick={handleSearchSubmit}
+        disabled={qaLoading || !localVal.trim()}
+        style={{
+          height: '32px',
+          background: '#ef4444',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '8px',
+          padding: '0 1.25rem',
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          cursor: (qaLoading || !localVal.trim()) ? 'default' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.35rem',
+          transition: 'all 0.15s'
+        }}
+      >
+        {qaLoading ? 'Thinking...' : 'Ask AI'}
+      </button>
+
+      {(localVal.trim() || hasResponse || hasContextualCard) && (
+        <button
+          onClick={() => {
+            setLocalVal('');
+            setQaInput('');
+            onReset();
+          }}
+          style={{
+            height: '32px',
+            background: 'transparent',
+            color: '#71717a',
+            border: '1.5px solid var(--rim)',
+            borderRadius: '8px',
+            padding: '0 0.85rem',
+            fontSize: '0.72rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            transition: 'all 0.15s'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = '#ef4444';
+            e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = '#71717a';
+            e.currentTarget.style.borderColor = 'var(--rim)';
+          }}
+          title="Clear query and reset view"
+        >
+          Reset
+        </button>
+      )}
+    </div>
+  );
+};
+
+// Premium welcoming dashboard onboarding layout
+interface WelcomeDashboardProps {
+  selectedDataset: any;
+  onSelectPrompt: (prompt: string) => void;
+  onToggleDefaultReports: () => void;
+}
+
+const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({
+  selectedDataset,
+  onSelectPrompt,
+  onToggleDefaultReports
+}) => {
+  const getSuggestions = () => {
+    if (!selectedDataset) return [];
+    const cols = selectedDataset.columns_meta || [];
+    const names = cols.map((c: any) => c.name.toLowerCase());
+    
+    const suggs: string[] = [];
+    if (names.includes('sleep_hours') && names.includes('gender')) {
+      suggs.push("What is the average sleep_hours by gender?");
+    }
+    if (names.includes('stress_level') && names.includes('gender')) {
+      suggs.push("Compare stress_level across gender");
+    }
+    if (names.includes('daily_social_media_hours') && names.includes('anxiety_level')) {
+      suggs.push("Show daily_social_media_hours vs anxiety_level correlation");
+    }
+    if (names.includes('depression_label')) {
+      suggs.push("What is the distribution of depression_label?");
+    }
+    
+    if (suggs.length < 3) {
+      const numCols = cols.filter((c: any) => c.type === 'number').map((c: any) => c.name);
+      const catCols = cols.filter((c: any) => c.type === 'string' || c.type === 'category').map((c: any) => c.name);
+      if (numCols.length > 0 && catCols.length > 0) {
+        suggs.push(`Show average ${numCols[0]} by ${catCols[0]}`);
+      }
+      if (numCols.length >= 2) {
+        suggs.push(`Correlation between ${numCols[0]} and ${numCols[1]}`);
+      }
+    }
+    
+    return suggs.slice(0, 4);
+  };
+
+  const suggestions = getSuggestions();
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '1.25rem',
+      flex: 1,
+      minHeight: 0,
+      padding: '2.5rem 1.5rem',
+      background: 'radial-gradient(circle at 50% 30%, rgba(239, 68, 68, 0.045) 0%, rgba(6, 4, 5, 0.5) 100%)',
+      borderRadius: '16px',
+      border: '1.5px solid var(--rim)',
+      backdropFilter: 'blur(12px)',
+      color: '#fff',
+      alignItems: 'center',
+      justifyContent: 'center',
+      textAlign: 'center',
+      margin: '0.5rem 0'
+    }}>
+      <motion.div
+        initial={{ scale: 0.85, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 90 }}
+        style={{
+          width: '68px',
+          height: '68px',
+          borderRadius: '20px',
+          background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.16) 0%, rgba(249, 115, 22, 0.04) 100%)',
+          border: '1.5px solid rgba(239, 68, 68, 0.35)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 8px 24px rgba(239, 68, 68, 0.12)',
+          marginBottom: '0.2rem'
+        }}
+      >
+        <Sparkles size={32} style={{ color: '#ef4444' }} />
+      </motion.div>
+
+      <div style={{ maxWidth: '500px' }}>
+        <h2 style={{ fontSize: '1.45rem', fontWeight: 900, letterSpacing: '-0.02em', marginBottom: '0.4rem', color: '#fff' }}>
+          Ready to Explore Your Dataset
+        </h2>
+        <p style={{ fontSize: '0.78rem', color: '#71717a', lineHeight: 1.5, margin: 0 }}>
+          Ask natural language questions to generate charts, correlation scatters, and AI narrative interpretations. Your analytical queries compile and run strictly inside your local sandbox.
+        </p>
+      </div>
+
+      {selectedDataset && (
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px',
+          background: 'rgba(15, 24, 40, 0.3)',
+          border: '1px solid var(--rim)',
+          borderRadius: '99px',
+          padding: '5px 12px',
+          fontSize: '0.68rem',
+          color: '#e4e4e7',
+          fontFamily: 'var(--mono)'
+        }}>
+          <Database size={12} style={{ color: '#ef4444' }} />
+          <span>Active Table: <strong>{selectedDataset.name}</strong></span>
+          <span style={{ color: '#27272a' }}>|</span>
+          <span>{Number(selectedDataset.row_count || 1200).toLocaleString()} rows loaded</span>
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <div style={{ width: '100%', maxWidth: '600px', marginTop: '0.4rem' }}>
+          <div style={{ fontSize: '0.65rem', color: '#52525b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, marginBottom: '0.75rem' }}>
+            💡 Quick Exploration Prompts
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
+            {suggestions.map((s, idx) => (
+              <button
+                key={idx}
+                onClick={() => onSelectPrompt(s)}
+                style={{
+                  background: 'rgba(8, 4, 5, 0.65)',
+                  border: '1.5px solid var(--rim)',
+                  borderRadius: '10px',
+                  padding: '7px 12px',
+                  fontSize: '0.7rem',
+                  color: '#d4d4d8',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.15s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#fff';
+                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.45)';
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.02)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#d4d4d8';
+                  e.currentTarget.style.borderColor = 'var(--rim)';
+                  e.currentTarget.style.background = 'rgba(8, 4, 5, 0.65)';
+                }}
+              >
+                <span>{s}</span>
+                <ArrowRight size={11} style={{ color: '#ef4444' }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.8rem',
+        width: '100%',
+        maxWidth: '280px',
+        margin: '0.3rem 0'
+      }}>
+        <div style={{ flex: 1, height: '1.5px', background: 'var(--rim)' }} />
+        <span style={{ fontSize: '0.62rem', color: '#52525b', fontFamily: 'var(--mono)', fontWeight: 800 }}>OR</span>
+        <div style={{ flex: 1, height: '1.5px', background: 'var(--rim)' }} />
+      </div>
+
+      <button
+        onClick={onToggleDefaultReports}
+        style={{
+          background: 'rgba(239, 68, 68, 0.08)',
+          color: '#ef4444',
+          border: '1.5px solid rgba(239, 68, 68, 0.35)',
+          borderRadius: '10px',
+          padding: '7px 16px',
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          boxShadow: '0 4px 12px rgba(239, 68, 68, 0.05)',
+          transition: 'all 0.15s'
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+          e.currentTarget.style.color = '#fff';
+          e.currentTarget.style.borderColor = 'transparent';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
+          e.currentTarget.style.color = '#ef4444';
+          e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.35)';
+        }}
+      >
+        <span>📊 Load Prebuilt Workspace Reports</span>
+      </button>
+    </div>
+  );
+};
+
 export default function AnalyzePage({ setPage, onMenu }: P) {
-  const { ws, datasets, selectedDataset, setSelectedDataset, saveBookmark } = useVaultStore();
+  const { ws, datasets, selectedDataset, setSelectedDataset, saveBookmark, saveQuery } = useVaultStore();
   const { 
     workspacePipelineEnabled, 
+    setWorkspacePipelineEnabled,
     activeWorkspace, 
     activeSheetId, 
     setActiveSheetId, 
     setWorkspaceBlueprint,
-    setWorkspaceInFlight
+    setWorkspaceInFlight,
+    bypassedDatasets,
+    bypassDataset,
+    setContextualCard,
+    clearContextualCard,
   } = useWorkspaceStore();
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
@@ -268,6 +602,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const [ageRange, setAgeRange] = useState<[number, number]>([13, 19]);
   const [filterSearch, setFilterSearch] = useState('');
   const [fieldsSearch, setFieldsSearch] = useState('');
+  const [activeRightTab, setActiveRightTab] = useState<'fields' | 'filters'>('fields');
 
   // --- STATE FOR INTERACTIVE RIBBON ---
   const [history, setHistory] = useState<any[]>([]);
@@ -287,22 +622,43 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   // --- AI Q&A ASSISTANT STATE ---
   const [qaInput, setQaInput] = useState('');
   const [qaLoading, setQaLoading] = useState(false);
-  const [qaResponse, setQaResponse] = useState<any | null>(null);
-  // Always default to NEW ENGINE on mount — clear any stale localStorage 'false' left by old toggle clicks
-  const [analyticsPipelineEnabled, setAnalyticsPipelineEnabled] = useState(() => {
-    try { localStorage.removeItem('flags_USE_NEW_ANALYTICS_PIPELINE'); localStorage.removeItem('flags_USE_NEW_ANALYTICS_VISUALS'); } catch {}
-    return true;
-  });
+  const [qaResponse, setQaResponse] = useState<AnalyticsResult | string | null>(null);
+  const [showPredefinedReports, setShowPredefinedReports] = useState(false);
+  // On mount: clear any stale localStorage flags so the Zustand store is the single source of truth
+  useEffect(() => {
+    try {
+      localStorage.removeItem('flags_USE_NEW_ANALYTICS_PIPELINE');
+      localStorage.removeItem('flags_USE_NEW_ANALYTICS_VISUALS');
+    } catch {}
+    // Ensure the store always starts with the engine enabled
+    setWorkspacePipelineEnabled(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const isDev = typeof process !== 'undefined' ? process.env?.NODE_ENV !== 'production' : ((import.meta as any).env?.DEV ?? true);
 
   const resultContainerRef = useRef<HTMLDivElement>(null);
   const hasQueryResult = qaResponse && typeof qaResponse === 'object';
 
-  useEffect(() => {
+    useEffect(() => {
     if (hasQueryResult && resultContainerRef.current) {
       resultContainerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }, [qaResponse, hasQueryResult]);
+
+  // Reset Q&A and context when switching datasets
+  useEffect(() => {
+    setQaInput('');
+    setQaResponse(null);
+    setAnalyticalContext(null);
+    setIsFilterQueryActive(false);
+    setShowPredefinedReports(false);
+
+    if (!selectedDataset) {
+      useWorkspaceStore.getState().resetWorkspaceStore();
+    } else {
+      useWorkspaceStore.getState().clearAnalyticalSnapshots();
+    }
+  }, [selectedDataset?.name]);
 
   // --- CONTEXTUAL VISUALIZATION STATE ---
   type AnalyticalContext = {
@@ -416,7 +772,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const suggestedCards = useMemo(() => {
     if (!selectedDataset || !columnsList.length) return [];
 
-    if (analyticsPipelineEnabled) {
+    if (workspacePipelineEnabled) {
       const tableName = selectedDataset.name;
       const tbl = getSqlTableName(tableName);
       const rows = executeSQL(`SELECT * FROM ${tbl}`);
@@ -649,6 +1005,10 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     setQaResponse(null);
     setAnalyticalContext(null);
     setIsFilterQueryActive(false);
+    
+    // Clear analytical snapshots from workspace
+    useWorkspaceStore.getState().clearAnalyticalSnapshots();
+
     showToast('Resetting dashboard to defaults...');
     setTimeout(() => {
       setIsRefreshing(false);
@@ -1762,6 +2122,19 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const handleAskAI = (overrideInput?: string) => {
     const inputToUse = (overrideInput || qaInput).trim();
     if (!inputToUse) return;
+    if (overrideInput) {
+      setQaInput(overrideInput);
+    }
+    setShowPredefinedReports(true);
+
+    // Explicit Limit Rejection (Risk 2)
+    if (workspacePipelineEnabled && activeWorkspace) {
+      const qaSheets = activeWorkspace.sheets.filter(s => s.id.startsWith('snapshot_'));
+      if (qaSheets.length >= 5) {
+        showToast('⚠️ Snapshot limit reached (max 5). Close an existing tab at the bottom first.');
+        return;
+      }
+    }
 
     // Clear stale state before any routing
     setQaResponse(null);
@@ -1771,7 +2144,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     setQaLoading(true);
     setLoadingStage(0);
 
-    if (analyticsPipelineEnabled && selectedDataset) {
+    if (workspacePipelineEnabled && selectedDataset) {
       // Staged loading transitions for premium feel
       setTimeout(() => setLoadingStage(1), 200);
       setTimeout(() => setLoadingStage(2), 450);
@@ -1788,6 +2161,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
             tableName,
             rows,
             profile,
+            bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
           };
           
           const result = await runAnalyticsQuestion(inputToUse, context);
@@ -1802,14 +2176,79 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
           
           setQaResponse(result);
           setAnalyticalContext(null); // Managed inside ResultView / ComputedView
+          
+          // Wire store actions so dynamic snapshots are added to the workspace
+          useWorkspaceStore.getState().addAnalyticalSnapshot(inputToUse, result);
+
+          // ── Save query to history (IndexedDB in solo mode, server in team mode) ──
+          if (ws && selectedDataset && result.status !== 'error') {
+            const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
+            const intentRaw = (result as any).plan?.intent ?? '';
+            const chartType = intentRaw === 'correlation' ? 'scatter'
+              : intentRaw === 'filter' ? 'table'
+              : 'bar';
+            saveQuery({
+              workspace_id: ws.id,
+              dataset_id: selectedDataset.id,
+              question: inputToUse,
+              generated_sql: (result as any).provenance?.sql ?? '',
+              result_data: resultRows.slice(0, 500), // cap to 500 rows for storage
+              chart_type: chartType,
+              insights: (result as any).insights ?? [],
+              execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
+              row_count: resultRows.length,
+            }).catch(e => console.warn('Failed to save query to history:', e));
+          }
+
+          // ─────────────────────────────────────────────────────────────────
+          // LEVEL 2: CONTEXTUAL CARD INJECTION
+          // For computed/partial results, inject the answer as a highlighted
+          // card into the most relevant static sheet and auto-switch to it.
+          // ─────────────────────────────────────────────────────────────────
+          if ((result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
+            try {
+              const visualContract = mapToVisualContract(result);
+              const targetSheetId = matchResultToSheet(result, activeWorkspace);
+
+              // Determine chart type from intent
+              const intentChartMap: Record<string, 'bar' | 'scatter' | 'table' | 'kpi'> = {
+                distribution: 'bar', grouped_average: 'bar', ranking: 'bar',
+                comparison: 'bar', correlation: 'scatter', feature_importance: 'bar',
+                filter: 'table', summary: 'kpi',
+              };
+              const chartType = intentChartMap[(result as any).plan?.intent] ?? 'bar';
+
+              setContextualCard({
+                sheetId: targetSheetId,
+                cardId: 'card_contextual_qa',
+                question: inputToUse,
+                visualContract,
+                intent: (result as any).plan?.intent || 'summary',
+                chartType,
+              });
+
+              // Switch to the matched sheet so the user sees the injection immediately
+              setActiveSheetId(targetSheetId);
+              // Clear Q&A response so we drop into STATE 4 (canvas view) instead of result view
+              setQaResponse(null);
+            } catch (injErr) {
+              console.warn('[Level2] Contextual card injection failed:', injErr);
+              // Non-fatal — Q&A result still visible via snapshot tab
+            }
+          }
         } catch (err: any) {
           console.error('Error in new analytics pipeline:', err);
+          const errorMsg = err.message || 'An unexpected error occurred in the analytics pipeline.';
           setQaResponse({
             status: 'error',
-            errorId: `err_${Date.now()}`,
-            message: err.message || 'An unexpected error occurred in the analytics pipeline.'
+            debugId: `err_${Date.now()}`,
+            message: errorMsg,
+            provenance: { question: inputToUse, planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
           });
           setAnalyticalContext(null);
+          
+          // Wire store actions to inject error details into workspace
+          useWorkspaceStore.getState().commitAnalyticalSnapshotError(inputToUse, errorMsg);
         } finally {
           setQaLoading(false);
         }
@@ -3007,16 +3446,23 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
       {/* 4. MAIN DASHBOARD CONTENT AREA */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         
-        {/* LEFT AREA: CANVAS PANEL (Scrollable, takes remaining space) */}
+                {/* LEFT AREA: CANVAS PANEL (Non-scrollable container wrapper) */}
         <div style={{ 
           flex: 1, 
-          overflowY: 'auto', 
-          padding: '0.75rem', 
           display: 'flex', 
           flexDirection: 'column', 
-          gap: '0.65rem',
-          background: '#09090c' 
+          background: '#09090c',
+          overflow: 'hidden'
         }}>
+          {/* Scrollable canvas body */}
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '0.75rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.65rem'
+          }}>
           
           {activeTab === 'report' ? (
             <div style={getCanvasStyle()}>
@@ -3045,36 +3491,33 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                       <span style={{ 
                         fontSize: '0.58rem', 
                         fontWeight: 700,
-                        color: analyticsPipelineEnabled ? '#10b981' : '#a1a1aa', 
-                        background: analyticsPipelineEnabled ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.03)', 
-                        border: `1px solid ${analyticsPipelineEnabled ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)'}`, 
+                        color: workspacePipelineEnabled ? '#10b981' : '#a1a1aa', 
+                        background: workspacePipelineEnabled ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.03)', 
+                        border: `1px solid ${workspacePipelineEnabled ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)'}`, 
                         padding: '2px 6px', 
                         borderRadius: '4px',
                         textTransform: 'uppercase' as const,
                         letterSpacing: '0.02em'
                       }}>
-                        Analytics Pipeline: {analyticsPipelineEnabled ? 'New Engine Active' : 'Legacy Mode'}
+                        Analytics Pipeline: {workspacePipelineEnabled ? 'New Engine Active' : 'Legacy Mode'}
                       </span>
                       <button
                         type="button"
                         aria-label="Toggle analytics pipeline"
-                        aria-pressed={analyticsPipelineEnabled}
+                        aria-pressed={workspacePipelineEnabled}
                         onClick={() => {
-                          const nextVal = !analyticsPipelineEnabled;
-                          // Sync localStorage so isFlagOn reads the right value on next render
-                          if (nextVal) {
+                          const nextVal = !workspacePipelineEnabled;
+                          // localStorage is no longer the source of truth — store is authoritative
+                          try {
                             localStorage.removeItem('flags_USE_NEW_ANALYTICS_PIPELINE');
                             localStorage.removeItem('flags_USE_NEW_ANALYTICS_VISUALS');
-                          } else {
-                            localStorage.setItem('flags_USE_NEW_ANALYTICS_PIPELINE', 'false');
-                            localStorage.setItem('flags_USE_NEW_ANALYTICS_VISUALS', 'false');
-                          }
-                          setAnalyticsPipelineEnabled(nextVal);
+                          } catch {}
+                          setWorkspacePipelineEnabled(nextVal);
                         }}
                         style={{
                           width: '28px',
                           height: '16px',
-                          background: analyticsPipelineEnabled ? '#10b981' : '#27272a',
+                          background: workspacePipelineEnabled ? '#10b981' : '#27272a',
                           borderRadius: '999px',
                           border: 'none',
                           cursor: 'pointer',
@@ -3090,68 +3533,33 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                           borderRadius: '50%',
                           position: 'absolute' as const,
                           top: '2px',
-                          left: analyticsPipelineEnabled ? '14px' : '2px',
+                          left: workspacePipelineEnabled ? '14px' : '2px',
                           transition: 'left 0.2s ease-in-out'
                         }} />
                       </button>
                     </div>
                     {isDev && (
                       <span style={{ fontSize: '0.52rem', color: '#52525b', fontFamily: 'var(--mono)' }}>
-                        Pipeline flags: pipeline={String(analyticsPipelineEnabled)}, visuals={String(analyticsPipelineEnabled)}
+                        Pipeline flags: pipeline={String(workspacePipelineEnabled)}, visuals={String(workspacePipelineEnabled)}
                       </span>
                     )}
                   </div>
                 </div>
                 
-                <div style={{ display: 'flex', gap: '0.55rem' }}>
-                  <div style={{ flex: 1, position: 'relative' }}>
-                    <Search size={13} style={{ position: 'absolute', left: 10, top: 9.5, color: '#52525b' }} />
-                    <input
-                      type="text"
-                      placeholder="e.g., average sleep hours for female TikTok users aged 14 to 16..."
-                      value={qaInput}
-                      onChange={(e) => setQaInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') handleAskAI(); }}
-                      style={{
-                        width: '100%',
-                        height: '32px',
-                        background: '#080405',
-                        border: '1.5px solid var(--rim)',
-                        borderRadius: '8px',
-                        paddingLeft: '2.1rem',
-                        paddingRight: '1rem',
-                        fontSize: '0.75rem',
-                        color: '#fff',
-                        outline: 'none',
-                        transition: 'border-color 0.15s'
-                      }}
-                      onFocus={(e) => e.target.style.borderColor = '#ef4444'}
-                      onBlur={(e) => e.target.style.borderColor = 'var(--rim)'}
-                    />
-                  </div>
-                  
-                  <button
-                    onClick={() => handleAskAI()}
-                    disabled={qaLoading || !qaInput.trim()}
-                    style={{
-                      height: '32px',
-                      background: '#ef4444',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '8px',
-                      padding: '0 1.25rem',
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      cursor: (qaLoading || !qaInput.trim()) ? 'default' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.35rem',
-                      transition: 'all 0.15s'
-                    }}
-                  >
-                    {qaLoading ? 'Thinking...' : 'Ask AI'}
-                  </button>
-                </div>
+                <QuerySearchBar
+                  qaLoading={qaLoading}
+                  hasResponse={!!qaResponse}
+                  hasContextualCard={!!useWorkspaceStore.getState().contextualCard}
+                  onSearch={(query) => handleAskAI(query)}
+                  onReset={() => {
+                    setQaResponse(null);
+                    setAnalyticalContext(null);
+                    setShowPredefinedReports(false);
+                    useWorkspaceStore.getState().clearContextualCard();
+                  }}
+                  qaInput={qaInput}
+                  setQaInput={setQaInput}
+                />
 
 
 
@@ -3193,6 +3601,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                         setQaResponse(null);
                         setAnalyticalContext(null);
                         setIsFilterQueryActive(false);
+                        // Clear analytical snapshots
+                        useWorkspaceStore.getState().clearAnalyticalSnapshots();
                       }}
                       style={{
                         background: 'transparent',
@@ -3424,34 +3834,57 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                    UNIFIED DASHBOARD SHELL â€” permanent operating system
                    All query types render inside this grid. Only data changes.
                    ═══════════════════════════════════════════════════════════════════ */
-                workspacePipelineEnabled && activeWorkspace ? (
+                workspacePipelineEnabled && activeWorkspace && !hasQueryResult ? (
                   /* STATE 4: Workspace Engine Canvas Dashboard */
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
-                    <ResultView 
-                      result={{
-                        status: 'computed',
-                        plan: { planId: 'workspace', intent: 'summary', confidence: 1, source: 'pattern' },
-                        data: { status: 'success', rows: [] },
-                        chart: { chartType: 'none' },
-                        narrative: '',
-                        provenance: { question: 'Workspace Canvas', planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
-                      }} 
+                  !showPredefinedReports ? (
+                    <WelcomeDashboard
+                      selectedDataset={selectedDataset}
+                      onSelectPrompt={(prompt) => handleAskAI(prompt)}
+                      onToggleDefaultReports={() => setShowPredefinedReports(true)}
                     />
-                  </div>
-                ) : analyticsPipelineEnabled ? (
-                    hasQueryResult ? (
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
+                      <ResultView 
+                        result={{
+                          status: 'computed',
+                          plan: { planId: 'workspace', intent: 'summary', confidence: 1, source: 'pattern' },
+                          data: { status: 'success', rows: [] },
+                          chart: { chartType: 'none' },
+                          narrative: '',
+                          provenance: { question: 'Workspace Canvas', planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
+                        }} 
+                      />
+                    </div>
+                  )
+                ) : hasQueryResult ? (
                       /* STATE 3: Query Result Dashboard */
                       <div ref={resultContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
-                        <ResultView 
-                          result={qaResponse} 
-                          onSelectChoice={(choice) => handleRunPresetQuestion(choice.question)}
-                          onSelectQuestion={handleRunPresetQuestion} 
-                        />
-                        {isDev && (
-                          <PlanPreview plan={(qaResponse as any).plan || (qaResponse as any).choices?.[0]?.plan} />
+                        {qaResponse && typeof qaResponse === 'object' && (
+                          <ResultView 
+                            result={qaResponse} 
+                            onSelectChoice={(choice) => handleRunPresetQuestion(choice.question)}
+                            onSelectQuestion={handleRunPresetQuestion} 
+                            onBypass={() => {
+                              if (selectedDataset && qaResponse.status === 'blocked' && qaResponse.provenance) {
+                                bypassDataset(selectedDataset.id);
+                                handleAskAI(qaResponse.provenance.question);
+                              }
+                            }}
+                          />
+                        )}
+                        {isDev && qaResponse && typeof qaResponse === 'object' && (
+                          <PlanPreview 
+                            plan={
+                              (qaResponse.status === 'computed' || qaResponse.status === 'partial')
+                                ? qaResponse.plan
+                                : (qaResponse.status === 'clarify')
+                                  ? qaResponse.clarification.choices[0]?.plan
+                                  : undefined
+                            } 
+                          />
                         )}
                       </div>
-                    ) : (
+                    ) : workspacePipelineEnabled ? (
                       /* STATE 2: Ready State for New Engine */
                       <QueryReadyState 
                         datasetName={selectedDataset.name}
@@ -3467,8 +3900,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                         }}
                         onSelectQuestion={handleRunPresetQuestion}
                       />
-                    )
-                  ) : (
+                    ) : (
+
                     /* LEGACY MODE: Original static dashboard shell */
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
                       
@@ -4219,67 +4652,119 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
             </div>
           )}
 
-          {/* Status Bar */}
-          {selectedDataset && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.5rem', borderTop: '1px solid #111118', flexShrink: 0, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.55rem', color: '#52525b', fontFamily: 'var(--mono)' }}>
-                Local Power BI-style report
-              </span>
-              <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
-              <span style={{ fontSize: '0.55rem', color: '#3b82f6', fontFamily: 'var(--mono)', fontWeight: 700 }}>
-                {(kpis.records > 0 ? kpis.records : selectedDataset.row_count ?? 0).toLocaleString()} rows
-              </span>
-              <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
-              <span style={{ fontSize: '0.55rem', color: '#52525b', fontFamily: 'var(--mono)' }}>
-                {selectedDataset.name?.split('.').pop()?.toUpperCase() ?? 'CSV'} loaded
-              </span>
-              <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
-              <span style={{ fontSize: '0.55rem', background: 'rgba(34,197,94,0.06)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.15)', padding: '0px 5px', borderRadius: '3px', fontWeight: 700 }}>
-                🔒 Local sandbox
-              </span>
-              {analyticalContext && (
-                <>
-                  <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
-                  <span style={{ fontSize: '0.55rem', color: '#8b5cf6', fontFamily: 'var(--mono)' }}>
-                    {analyticalContext.type} · n={analyticalContext.scatterPairs.length}
-                  </span>
-                </>
-              )}
-            </div>
-          )}
+                    </div> {/* End Scrollable canvas body */}
 
-          {/* Bottom sheet page tabs */}
+          {/* DOCKED FOOTER AREA */}
           <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.2rem',
+            flexShrink: 0,
+            padding: '0.4rem 0.75rem 0.65rem 0.75rem',
             borderTop: '1px solid #1a1a24',
-            paddingTop: '0.5rem',
-            marginTop: 'auto',
-            fontSize: '0.68rem',
-            flexShrink: 0
+            background: '#09090c',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.35rem'
           }}>
+            {/* Status Bar */}
+            {selectedDataset && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.2rem 0', flexShrink: 0, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.55rem', color: '#52525b', fontFamily: 'var(--mono)' }}>
+                  Local Power BI-style report
+                </span>
+                <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
+                <span style={{ fontSize: '0.55rem', color: '#3b82f6', fontFamily: 'var(--mono)', fontWeight: 700 }}>
+                  {(kpis.records > 0 ? kpis.records : selectedDataset.row_count ?? 0).toLocaleString()} rows
+                </span>
+                <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
+                <span style={{ fontSize: '0.55rem', color: '#52525b', fontFamily: 'var(--mono)' }}>
+                  {selectedDataset.name?.split('.').pop()?.toUpperCase() ?? 'CSV'} loaded
+                </span>
+                <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
+                <span style={{ fontSize: '0.55rem', background: 'rgba(34,197,94,0.06)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.15)', padding: '0px 5px', borderRadius: '3px', fontWeight: 700 }}>
+                  🔒 Local sandbox
+                </span>
+                {analyticalContext && (
+                  <>
+                    <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#27272a', flexShrink: 0 }} />
+                    <span style={{ fontSize: '0.55rem', color: '#8b5cf6', fontFamily: 'var(--mono)' }}>
+                      {analyticalContext.type} · n={analyticalContext.scatterPairs.length}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Bottom sheet page tabs */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.2rem',
+              fontSize: '0.68rem',
+              flexShrink: 0
+            }}>
             {workspacePipelineEnabled && activeWorkspace ? (
               activeWorkspace.sheets.map((sheet) => {
                 const isActive = activeSheetId === sheet.id;
+                const isSnapshot = sheet.id.startsWith('snapshot_');
                 return (
-                  <button
+                  <div
                     key={sheet.id}
                     style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
                       background: isActive ? '#0e0e12' : 'transparent',
                       color: isActive ? '#ef4444' : '#71717a',
                       border: isActive ? '1px solid #3c1417' : '1px solid transparent',
-                      borderBottom: isActive ? '1px solid transparent' : '1px solid transparent',
                       borderRadius: '4px 4px 0 0',
                       padding: '3px 10px',
                       fontSize: '0.65rem',
                       fontWeight: isActive ? 700 : 500,
-                      cursor: 'pointer'
+                      gap: '4px'
                     }}
-                    onClick={() => setActiveSheetId(sheet.id)}
                   >
-                    {sheet.name}
-                  </button>
+                    <button
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'inherit',
+                        fontSize: 'inherit',
+                        fontWeight: 'inherit',
+                        cursor: 'pointer',
+                        padding: 0
+                      }}
+                      onClick={() => {
+                        setActiveSheetId(sheet.id);
+                        setQaResponse(null);
+                        setAnalyticalContext(null);
+                      }}
+                    >
+                      {sheet.name}
+                    </button>
+                    {sheet.id !== 'sheet_overview' && activeWorkspace.sheets[0]?.id !== sheet.id && (
+                      <button
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#52525b',
+                          cursor: 'pointer',
+                          fontSize: '0.55rem',
+                          padding: '0 2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          lineHeight: 1
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                        onMouseLeave={e => e.currentTarget.style.color = '#52525b'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          useWorkspaceStore.getState().removeAnalyticalSnapshot(sheet.id);
+                        }}
+                        title="Close sheet"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 );
               })
             ) : (
@@ -4306,7 +4791,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                 );
               })
             )}
-            <button 
+                        <button 
               style={{ background: 'transparent', border: 'none', color: '#71717a', fontSize: '0.8rem', padding: '0 6px', cursor: 'pointer' }}
               onClick={() => alert('New analysis sheet tab added!')}
             >
@@ -4314,342 +4799,384 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
             </button>
           </div>
 
-        </div>
+          </div> {/* End DOCKED FOOTER AREA */}
+        </div> {/* End LEFT AREA container wrapper */}
 
-        {/* MIDDLE AREA: FILTERS PANEL (230px wide) */}
-        {selectedDataset && isMentalHealthSchema && (
-          <div style={{
-            width: 230,
-          borderLeft: '1px solid #3c1417',
-          background: '#0a0a0d',
-          display: 'flex',
-          flexDirection: 'column',
-          flexShrink: 0,
-          overflow: 'hidden'
-        }}>
-          {/* Header */}
-          <div style={{
-            padding: '0.65rem 0.85rem',
-            borderBottom: '1px solid #1a1a24',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.68rem', fontWeight: 800, color: '#f4f4f5', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              <Filter size={11} style={{ color: '#ef4444' }} /> Filters
-            </span>
-            <button 
-              style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '0.6rem', cursor: 'pointer', padding: 0 }}
-              onClick={() => {
-                setGenderFilter({ male: true, female: true });
-                setPlatformFilter({ Instagram: true, TikTok: true, YouTube: true, Snapchat: true, Twitter: true });
-                setAgeRange([13, 19]);
-              }}
-            >
-              Clear filters
-            </button>
-          </div>
-
-          {/* Search filters */}
-          <div style={{ padding: '0.55rem 0.85rem', borderBottom: '1px solid #1a1a24' }}>
-            <div style={{ position: 'relative' }}>
-              <Search size={11} style={{ position: 'absolute', left: 8, top: 7.5, color: '#52525b' }} />
-              <input 
-                type="text" 
-                style={{ 
-                  height: 25, 
-                  fontSize: '0.65rem', 
-                  paddingLeft: '1.5rem', 
-                  background: '#121215', 
-                  borderColor: '#3c1417',
-                  borderWidth: '1px',
-                  borderStyle: 'solid',
-                  borderRadius: '4px',
-                  width: '100%',
-                  color: '#fff',
-                  outline: 'none'
-                }}
-                placeholder="Search filters..."
-                value={filterSearch}
-                onChange={(e) => setFilterSearch(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Collapsible content */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 0.85rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            
-            {/* Filter Section 1: Gender */}
-            <div style={{ borderBottom: '1px solid #1a1a24', paddingBottom: '0.75rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
-                <span>Gender</span>
-                <span style={{ fontSize: '0.58rem', color: '#71717a' }}>is (All)</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                  <input 
-                    type="checkbox" 
-                    style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                    checked={genderFilter.male && genderFilter.female}
-                    onChange={handleSelectAllGender}
-                  />
-                  <span style={{ color: '#e4e4e7' }}>Select all</span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                  <input 
-                    type="checkbox" 
-                    style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                    checked={genderFilter.male} 
-                    onChange={() => setGenderFilter(prev => ({ ...prev, male: !prev.male }))}
-                  />
-                  <span style={{ color: '#e4e4e7' }}>male</span>
-                  <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>{baselineCounts.male}</span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                  <input 
-                    type="checkbox" 
-                    style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                    checked={genderFilter.female} 
-                    onChange={() => setGenderFilter(prev => ({ ...prev, female: !prev.female }))}
-                  />
-                  <span style={{ color: '#e4e4e7' }}>female</span>
-                  <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>{baselineCounts.female}</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Filter Section 2: Platform */}
-            <div style={{ borderBottom: '1px solid #1a1a24', paddingBottom: '0.75rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
-                <span>Platform</span>
-                <span style={{ fontSize: '0.58rem', color: '#71717a' }}>is (All)</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                  <input 
-                    type="checkbox" 
-                    style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                    checked={Object.values(platformFilter).every(v => v)}
-                    onChange={handleSelectAllPlatform}
-                  />
-                  <span style={{ color: '#e4e4e7' }}>Select all</span>
-                </label>
-                {Object.keys(platformFilter).map((plat) => (
-                  <label key={plat} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                    <input 
-                      type="checkbox" 
-                      style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                      checked={platformFilter[plat]} 
-                      onChange={() => setPlatformFilter(prev => ({ ...prev, [plat]: !prev[plat] }))}
-                    />
-                    <span style={{ color: '#e4e4e7' }}>{plat}</span>
-                    <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>
-                      {(baselineCounts as any)[plat] || 0}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* Filter Section 3: Age Range */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
-                <span>Age Range</span>
-                <span style={{ color: '#ef4444', fontWeight: 700 }}>{ageRange[0]} - {ageRange[1]}</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                  <input 
-                    type="range" 
-                    min={13} 
-                    max={19} 
-                    value={ageRange[0]} 
-                    onChange={(e) => setAgeRange([parseInt(e.target.value), Math.max(parseInt(e.target.value), ageRange[1])])}
-                    style={{ flex: 1, accentColor: '#ef4444', height: 3 }} 
-                  />
-                  <input 
-                    type="range" 
-                    min={13} 
-                    max={19} 
-                    value={ageRange[1]} 
-                    onChange={(e) => setAgeRange([Math.min(parseInt(e.target.value), ageRange[0]), parseInt(e.target.value)])}
-                    style={{ flex: 1, accentColor: '#ef4444', height: 3 }} 
-                  />
-                </div>
-                <button 
-                  style={{
-                    background: 'transparent',
-                    border: '1px solid #3c1417',
-                    color: '#ef4444',
-                    borderRadius: '4px',
-                    padding: '3px 0',
-                    fontSize: '0.65rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    marginTop: '0.2rem',
-                    textAlign: 'center'
-                  }}
-                  onClick={() => alert(`Filters restricted to age range ${ageRange[0]} - ${ageRange[1]}`)}
-                >
-                  Apply filter
-                </button>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Bottom indicator */}
-          <div style={{ padding: '0.55rem 0.85rem', borderTop: '1px solid #1a1a24', display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#71717a' }}>
-            <span>Filters on all pages</span>
-            <span>â¯</span>
-          </div>
-        </div>
-        )}
-
-        {/* RIGHT AREA: FIELDS PANEL (230px wide) */}
+        {/* RIGHT AREA: WORKSPACE SIDEBAR (240px wide — Saves 220px of Screen Width) */}
         {selectedDataset && (
           <div style={{
-            width: 230,
-          borderLeft: '1px solid #3c1417',
-          background: '#0a0a0d',
-          display: 'flex',
-          flexDirection: 'column',
-          flexShrink: 0,
-          overflow: 'hidden'
-        }}>
-          {/* Header */}
-          <div style={{
-            padding: '0.65rem 0.85rem',
-            borderBottom: '1px solid #1a1a24',
+            width: 240,
+            borderLeft: '1px solid #3c1417',
+            background: '#0a0a0d',
             display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
+            flexDirection: 'column',
+            flexShrink: 0,
+            overflow: 'hidden'
           }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.68rem', fontWeight: 800, color: '#f4f4f5', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              <Database size={11} style={{ color: '#ef4444' }} /> Fields
-            </span>
-            <span style={{ fontSize: '0.65rem', color: '#71717a', cursor: 'pointer' }}>â®â®</span>
-          </div>
+            
+            {/* Header (Segmented Tabs Switcher if Mental Health dataset is active) */}
+            {isMentalHealthSchema ? (
+              <div style={{
+                display: 'flex',
+                background: '#121215',
+                padding: '3px',
+                borderRadius: '6px',
+                margin: '0.65rem 0.85rem 0.3rem 0.85rem',
+                border: '1px solid #1a1a24'
+              }}>
+                <button
+                  onClick={() => setActiveRightTab('fields')}
+                  style={{
+                    flex: 1,
+                    background: activeRightTab === 'fields' ? 'linear-gradient(135deg, #ef4444, #990f14)' : 'transparent',
+                    color: activeRightTab === 'fields' ? '#fff' : '#a1a1aa',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '5px 0',
+                    fontSize: '0.65rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  📁 Fields
+                </button>
+                <button
+                  onClick={() => setActiveRightTab('filters')}
+                  style={{
+                    flex: 1,
+                    background: activeRightTab === 'filters' ? 'linear-gradient(135deg, #ef4444, #990f14)' : 'transparent',
+                    color: activeRightTab === 'filters' ? '#fff' : '#a1a1aa',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '5px 0',
+                    fontSize: '0.65rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  ⚙️ Filters
+                </button>
+              </div>
+            ) : (
+              /* Custom CSV schema header fallback */
+              <div style={{
+                padding: '0.65rem 0.85rem',
+                borderBottom: '1px solid #1a1a24',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.68rem', fontWeight: 800, color: '#f4f4f5', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <Database size={11} style={{ color: '#ef4444' }} /> Fields
+                </span>
+              </div>
+            )}
 
-          {/* Search fields */}
-          <div style={{ padding: '0.55rem 0.85rem', borderBottom: '1px solid #1a1a24' }}>
-            <div style={{ position: 'relative' }}>
-              <Search size={11} style={{ position: 'absolute', left: 8, top: 7.5, color: '#52525b' }} />
-              <input 
-                type="text" 
-                style={{ 
-                  height: 25, 
-                  fontSize: '0.65rem', 
-                  paddingLeft: '1.5rem', 
-                  background: '#121215', 
-                  borderColor: '#3c1417',
-                  borderWidth: '1px',
-                  borderStyle: 'solid',
-                  borderRadius: '4px',
-                  width: '100%',
-                  color: '#fff',
-                  outline: 'none'
-                }}
-                placeholder="Search fields..."
-                value={fieldsSearch}
-                onChange={(e) => setFieldsSearch(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Accordion List */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0.45rem' }}>
-            {selectedDataset && (
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                
-                {/* Accordion File Header */}
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.35rem', 
-                  fontSize: '0.65rem', 
-                  color: '#e4e4e7', 
-                  fontWeight: 700, 
-                  padding: '0.35rem 0.45rem', 
-                  background: '#121214',
-                  borderRadius: '4px',
-                  marginBottom: '0.25rem',
-                  textOverflow: 'ellipsis',
-                  overflow: 'hidden',
-                  whiteSpace: 'nowrap'
-                }}>
-                  <span>▼</span>
-                  <span>ðŸ“„</span> 
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{selectedDataset.name}</span>
+            {/* Content Body Switcher */}
+            {(!isMentalHealthSchema || activeRightTab === 'fields') ? (
+              /* FIELDS PANEL BODY RENDER */
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                {/* Search fields */}
+                <div style={{ padding: '0.55rem 0.85rem', borderBottom: '1px solid #1a1a24' }}>
+                  <div style={{ position: 'relative' }}>
+                    <Search size={11} style={{ position: 'absolute', left: 8, top: 7.5, color: '#52525b' }} />
+                    <input 
+                      type="text" 
+                      style={{ 
+                        height: 25, 
+                        fontSize: '0.65rem', 
+                        paddingLeft: '1.5rem', 
+                        background: '#121215', 
+                        borderColor: '#3c1417',
+                        borderWidth: '1px',
+                        borderStyle: 'solid',
+                        borderRadius: '4px',
+                        width: '100%',
+                        color: '#fff',
+                        outline: 'none'
+                      }}
+                      placeholder="Search fields..."
+                      value={fieldsSearch}
+                      onChange={(e) => setFieldsSearch(e.target.value)}
+                    />
+                  </div>
                 </div>
-                
-                {/* Fields list */}
-                <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: '0.5rem' }}>
-                  {filteredColumns.map(col => {
-                    const isNum = col.type === 'number' || ['DECIMAL','INTEGER','BIGINT','FLOAT'].includes(col.type?.toUpperCase());
-                    return (
-                      <div 
-                        key={col.name} 
-                        style={{ 
-                          padding: '0.28rem 0.45rem', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          gap: '0.4rem', 
-                          cursor: 'default',
-                          borderRadius: '3px',
-                          transition: 'background 0.1s'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = '#121216'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                      >
-                        <span style={{ 
-                          fontFamily: 'var(--mono)', 
-                          fontSize: '0.54rem', 
-                          color: isNum ? '#ef4444' : '#3b82f6', 
-                          fontWeight: 800,
-                          width: '18px',
-                          display: 'inline-block'
-                        }}>
-                          {isNum ? '#' : 'Aa'}
-                        </span>
-                        <span style={{ fontSize: '0.68rem', color: '#a1a1aa' }}>{col.name}</span>
-                        {isNum && (
-                          <span style={{ marginLeft: 'auto', color: '#71717a', fontSize: '0.62rem', fontWeight: 600 }}>Î£</span>
-                        )}
-                        {col.is_he && (
-                          <span style={{ marginLeft: isNum ? '0.2rem' : 'auto', color: '#c084fc', fontSize: '0.6rem' }} title="Homomorphically Encrypted">ðŸ”’</span>
-                        )}
+
+                {/* Accordion List */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '0.45rem' }}>
+                  {selectedDataset && (
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      
+                      {/* Accordion File Header */}
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '0.35rem', 
+                        fontSize: '0.65rem', 
+                        color: '#e4e4e7', 
+                        fontWeight: 700, 
+                        padding: '0.35rem 0.45rem', 
+                        background: '#121214',
+                        borderRadius: '4px',
+                        marginBottom: '0.25rem',
+                        textOverflow: 'ellipsis',
+                        overflow: 'hidden',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        <span>▼</span>
+                        <span>📄</span> 
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{selectedDataset.name}</span>
                       </div>
-                    );
-                  })}
+                      
+                      {/* Fields list */}
+                      <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: '0.5rem' }}>
+                        {filteredColumns.map(col => {
+                          const isNum = col.type === 'number' || ['DECIMAL','INTEGER','BIGINT','FLOAT'].includes(col.type?.toUpperCase());
+                          return (
+                            <div 
+                              key={col.name} 
+                              style={{ 
+                                padding: '0.28rem 0.45rem', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                gap: '0.4rem', 
+                                cursor: 'default',
+                                borderRadius: '3px',
+                                transition: 'background 0.1s'
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = '#121216'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                            >
+                              <span style={{ 
+                                fontFamily: 'var(--mono)', 
+                                fontSize: '0.54rem', 
+                                color: isNum ? '#ef4444' : '#3b82f6', 
+                                fontWeight: 800,
+                                width: '18px',
+                                display: 'inline-block'
+                              }}>
+                                {isNum ? '#' : 'Aa'}
+                              </span>
+                              <span style={{ fontSize: '0.68rem', color: '#a1a1aa' }}>{col.name}</span>
+                              {isNum && (
+                                <span style={{ marginLeft: 'auto', color: '#71717a', fontSize: '0.62rem', fontWeight: 600 }}>Σ</span>
+                              )}
+                              {col.is_he && (
+                                <span style={{ marginLeft: isNum ? '0.2rem' : 'auto', color: '#c084fc', fontSize: '0.6rem' }} title="Homomorphically Encrypted">🔒</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                    </div>
+                  )}
                 </div>
 
+                {/* Visual Fields Builder Dropzone */}
+                <div style={{ padding: '0.55rem', borderTop: '1px solid #1a1a24' }}>
+                  <div style={{
+                    border: '1.5px dashed #451a1d',
+                    borderRadius: '6px',
+                    padding: '0.85rem 0.55rem',
+                    textAlign: 'center',
+                    background: 'rgba(239,68,68,0.01)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.35rem',
+                    cursor: 'default'
+                  }}>
+                    <div style={{ fontSize: '1.25rem' }}>▰</div>
+                    <span style={{ fontSize: '0.65rem', color: '#71717a', lineHeight: 1.3 }}>
+                      Drag data fields here to build visuals
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* FILTERS PANEL BODY RENDER */
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                {/* Clear filters row */}
+                <div style={{
+                  padding: '0.55rem 0.85rem',
+                  borderBottom: '1px solid #1a1a24',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active filters</span>
+                  <button 
+                    style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '0.6rem', cursor: 'pointer', padding: 0 }}
+                    onClick={() => {
+                      setGenderFilter({ male: true, female: true });
+                      setPlatformFilter({ Instagram: true, TikTok: true, YouTube: true, Snapchat: true, Twitter: true });
+                      setAgeRange([13, 19]);
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                </div>
+
+                {/* Search filters */}
+                <div style={{ padding: '0.55rem 0.85rem', borderBottom: '1px solid #1a1a24' }}>
+                  <div style={{ position: 'relative' }}>
+                    <Search size={11} style={{ position: 'absolute', left: 8, top: 7.5, color: '#52525b' }} />
+                    <input 
+                      type="text" 
+                      style={{ 
+                        height: 25, 
+                        fontSize: '0.65rem', 
+                        paddingLeft: '1.5rem', 
+                        background: '#121215', 
+                        borderColor: '#3c1417',
+                        borderWidth: '1px',
+                        borderStyle: 'solid',
+                        borderRadius: '4px',
+                        width: '100%',
+                        color: '#fff',
+                        outline: 'none'
+                      }}
+                      placeholder="Search filters..."
+                      value={filterSearch}
+                      onChange={(e) => setFilterSearch(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Scrollable list */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 0.85rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  
+                  {/* Filter Section 1: Gender */}
+                  <div style={{ borderBottom: '1px solid #1a1a24', paddingBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
+                      <span>Gender</span>
+                      <span style={{ fontSize: '0.58rem', color: '#71717a' }}>is (All)</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
+                        <input 
+                          type="checkbox" 
+                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
+                          checked={genderFilter.male && genderFilter.female}
+                          onChange={handleSelectAllGender}
+                        />
+                        <span style={{ color: '#e4e4e7' }}>Select all</span>
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
+                        <input 
+                          type="checkbox" 
+                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
+                          checked={genderFilter.male} 
+                          onChange={() => setGenderFilter(prev => ({ ...prev, male: !prev.male }))}
+                        />
+                        <span style={{ color: '#e4e4e7' }}>male</span>
+                        <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>{baselineCounts.male}</span>
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
+                        <input 
+                          type="checkbox" 
+                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
+                          checked={genderFilter.female} 
+                          onChange={() => setGenderFilter(prev => ({ ...prev, female: !prev.female }))}
+                        />
+                        <span style={{ color: '#e4e4e7' }}>female</span>
+                        <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>{baselineCounts.female}</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Filter Section 2: Platform */}
+                  <div style={{ borderBottom: '1px solid #1a1a24', paddingBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
+                      <span>Platform</span>
+                      <span style={{ fontSize: '0.58rem', color: '#71717a' }}>is (All)</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
+                        <input 
+                          type="checkbox" 
+                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
+                          checked={Object.values(platformFilter).every(v => v)}
+                          onChange={handleSelectAllPlatform}
+                        />
+                        <span style={{ color: '#e4e4e7' }}>Select all</span>
+                      </label>
+                      {Object.keys(platformFilter).map((plat) => (
+                        <label key={plat} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
+                          <input 
+                            type="checkbox" 
+                            style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
+                            checked={platformFilter[plat]} 
+                            onChange={() => setPlatformFilter(prev => ({ ...prev, [plat]: !prev[plat] }))}
+                          />
+                          <span style={{ color: '#e4e4e7' }}>{plat}</span>
+                          <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>
+                            {(baselineCounts as any)[plat] || 0}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Filter Section 3: Age Range */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
+                      <span>Age Range</span>
+                      <span style={{ color: '#ef4444', fontWeight: 700 }}>{ageRange[0]} - {ageRange[1]}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        <input 
+                          type="range" 
+                          min={13} 
+                          max={19} 
+                          value={ageRange[0]} 
+                          onChange={(e) => setAgeRange([parseInt(e.target.value), Math.max(parseInt(e.target.value), ageRange[1])])}
+                          style={{ flex: 1, accentColor: '#ef4444', height: 3 }} 
+                        />
+                        <input 
+                          type="range" 
+                          min={13} 
+                          max={19} 
+                          value={ageRange[1]} 
+                          onChange={(e) => setAgeRange([Math.min(parseInt(e.target.value), ageRange[0]), parseInt(e.target.value)])}
+                          style={{ flex: 1, accentColor: '#ef4444', height: 3 }} 
+                        />
+                      </div>
+                      <button 
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid #3c1417',
+                          color: '#ef4444',
+                          borderRadius: '4px',
+                          padding: '3px 0',
+                          fontSize: '0.65rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          marginTop: '0.2rem',
+                          textAlign: 'center'
+                        }}
+                        onClick={() => alert('Filters restricted to age range ' + ageRange[0] + ' - ' + ageRange[1])}
+                      >
+                        Apply filter
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Bottom indicator */}
+                <div style={{ padding: '0.55rem 0.85rem', borderTop: '1px solid #1a1a24', display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#71717a' }}>
+                  <span>Filters on all pages</span>
+                  <span>▶</span>
+                </div>
               </div>
             )}
           </div>
-
-          {/* Visual Fields Builder Dropzone (Red dashed border matching Power BI style in mockup) */}
-          <div style={{ padding: '0.55rem', borderTop: '1px solid #1a1a24' }}>
-            <div style={{
-              border: '1.5px dashed #451a1d',
-              borderRadius: '6px',
-              padding: '0.85rem 0.55rem',
-              textAlign: 'center',
-              background: 'rgba(239,68,68,0.01)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.35rem',
-              cursor: 'default'
-            }}>
-              <div style={{ fontSize: '1.25rem' }}>â–¦</div>
-              <span style={{ fontSize: '0.65rem', color: '#71717a', lineHeight: 1.3 }}>
-                Drag data fields here to build visuals
-              </span>
-            </div>
-          </div>
-        </div>
         )}
 
       </div>

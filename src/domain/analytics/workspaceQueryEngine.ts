@@ -30,36 +30,54 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
       name: 'Overview Dashboard',
       cards: [
         {
-          id: 'card_stress_gender',
-          title: 'Stress Level by Gender',
+          id: 'card_overview_sleep_gender',
+          title: 'Average Sleep by Gender',
           chartType: 'bar',
-          spec: { kind: 'groupedAverage', metricColumn: 'stress_level', groupColumn: 'gender', aggType: 'avg' }
+          spec: { kind: 'groupedAverage', metricColumn: 'sleep_hours', groupColumn: 'gender', aggType: 'avg' }
         },
         {
-          id: 'card_screentime_gender',
-          title: 'Social Hours by Gender',
-          chartType: 'bar',
-          spec: { kind: 'groupedAverage', metricColumn: 'daily_social_media_hours', groupColumn: 'gender', aggType: 'avg' }
+          id: 'card_overview_platform_share',
+          title: 'Platform Usage Share',
+          chartType: 'donut',
+          spec: { kind: 'distribution', metricColumn: 'platform_usage', binCount: 10 }
         },
         {
-          id: 'card_screentime_stress',
-          title: 'Social Hours vs Stress Level',
+          id: 'card_overview_screentime_stress_corr',
+          title: 'Screen Time vs Stress Level',
           chartType: 'scatter',
-          spec: { kind: 'correlation', xColumn: 'daily_social_media_hours', yColumn: 'stress_level' }
+          spec: { kind: 'correlation', xColumn: 'screen_time_before_sleep', yColumn: 'stress_level' }
+        },
+        {
+          id: 'card_overview_screentime_stress_line',
+          title: 'Screen Time Before Sleep vs Stress',
+          chartType: 'line',
+          spec: { kind: 'groupedAverage', metricColumn: 'stress_level', groupColumn: 'screen_time_before_sleep', aggType: 'avg' }
+        },
+        {
+          id: 'card_overview_gender_summary',
+          title: 'Gender Summary Report',
+          chartType: 'table',
+          spec: { kind: 'genderSummary' }
+        },
+        {
+          id: 'card_overview_anxiety_dist',
+          title: 'Anxiety Levels Distribution',
+          chartType: 'bar',
+          spec: { kind: 'distribution', metricColumn: 'anxiety_level', binCount: 10 }
         }
       ]
     });
 
-    // Tab 2: Sleep & Anxiety Metrics
+    // Tab 2: Sleep Analysis
     sheets.push({
-      id: 'sheet_sleep_anxiety',
-      name: 'Sleep & Anxiety Metrics',
+      id: 'sheet_sleep',
+      name: 'Sleep Analysis',
       cards: [
         {
-          id: 'card_sleep_academic',
-          title: 'Sleep Hours by Academic Grade',
+          id: 'card_sleep_age',
+          title: 'Sleep Hours by Age',
           chartType: 'bar',
-          spec: { kind: 'groupedAverage', metricColumn: 'sleep_hours', groupColumn: 'academic_performance', aggType: 'avg' }
+          spec: { kind: 'groupedAverage', metricColumn: 'sleep_hours', groupColumn: 'age', aggType: 'avg' }
         },
         {
           id: 'card_sleep_anxiety',
@@ -68,15 +86,93 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
           spec: { kind: 'correlation', xColumn: 'sleep_hours', yColumn: 'anxiety_level' }
         },
         {
-          id: 'card_depression_dist',
-          title: 'Depression Distribution Bins',
+          id: 'card_sleep_gender',
+          title: 'Sleep Hours by Gender',
           chartType: 'bar',
-          spec: { kind: 'distribution', metricColumn: 'depression_label', binCount: 5 }
+          spec: { kind: 'groupedAverage', metricColumn: 'sleep_hours', groupColumn: 'gender', aggType: 'avg' }
         }
       ]
     });
 
-    // Tab 3: Dynamic AI Insights
+    // Tab 3: Stress Analysis
+    sheets.push({
+      id: 'sheet_stress',
+      name: 'Stress Analysis',
+      cards: [
+        {
+          id: 'card_stress_screentime',
+          title: 'Stress Level vs Screen Time',
+          chartType: 'scatter',
+          spec: { kind: 'correlation', xColumn: 'screen_time_before_sleep', yColumn: 'stress_level' }
+        },
+        {
+          id: 'card_stress_gender',
+          title: 'Stress Level by Gender',
+          chartType: 'bar',
+          spec: { kind: 'groupedAverage', metricColumn: 'stress_level', groupColumn: 'gender', aggType: 'avg' }
+        },
+        {
+          id: 'card_stress_platform',
+          title: 'Stress Level by Platform',
+          chartType: 'bar',
+          spec: { kind: 'groupedAverage', metricColumn: 'stress_level', groupColumn: 'platform_usage', aggType: 'avg' }
+        }
+      ]
+    });
+
+    // Tab 4: Platform Usage
+    sheets.push({
+      id: 'sheet_platform',
+      name: 'Platform Usage',
+      cards: [
+        {
+          id: 'card_platform_screentime',
+          title: 'Screen Time by Platform',
+          chartType: 'bar',
+          spec: { kind: 'groupedAverage', metricColumn: 'screen_time_before_sleep', groupColumn: 'platform_usage', aggType: 'avg' }
+        },
+        {
+          id: 'card_platform_anxiety',
+          title: 'Platform Usage vs Anxiety',
+          chartType: 'bar',
+          spec: { kind: 'groupedAverage', metricColumn: 'anxiety_level', groupColumn: 'platform_usage', aggType: 'avg' }
+        },
+        {
+          id: 'card_platform_stress',
+          title: 'Platform Usage vs Stress',
+          chartType: 'bar',
+          spec: { kind: 'groupedAverage', metricColumn: 'stress_level', groupColumn: 'platform_usage', aggType: 'avg' }
+        }
+      ]
+    });
+
+    // Tab 5: Demographics
+    sheets.push({
+      id: 'sheet_demographics',
+      name: 'Demographics',
+      cards: [
+        {
+          id: 'card_demographics_age',
+          title: 'Age Distribution',
+          chartType: 'bar',
+          spec: { kind: 'distribution', metricColumn: 'age', binCount: 10 }
+        },
+        {
+          id: 'card_demographics_gender',
+          title: 'Gender Distribution',
+          chartType: 'bar',
+          spec: { kind: 'distribution', metricColumn: 'gender', binCount: 5 }
+        },
+        {
+          id: 'card_demographics_age_anxiety',
+          title: 'Age vs Anxiety Level',
+          chartType: 'scatter',
+          spec: { kind: 'correlation', xColumn: 'age', yColumn: 'anxiety_level' }
+        }
+      ]
+    });
+
+    // Tab 6: AI Insights
     sheets.push({
       id: 'sheet_insights',
       name: 'Interpretive AI Insights',
@@ -193,8 +289,13 @@ export const executeWorkspaceActiveTab = async (
   // Parallel loop over all active sheet cards
   await Promise.all(
     currentSheet.cards.map(async (card) => {
+      const spec = card.spec;
+      const isQueryable = spec && ('kind' in spec) && ['groupedAverage', 'correlation', 'distribution', 'ranking', 'genderSummary'].includes(spec.kind);
+      if (!isQueryable) {
+        return; // Skip static narrative, table, and kpi cards
+      }
       try {
-        const compiled = compileCardSpecToSQL(card.spec, tbl, where);
+        const compiled = compileCardSpecToSQL(spec, tbl, where);
         const rows = executeSQL(compiled.sql, params);
         
         // Map clean rows directly to discriminated visual contracts
@@ -220,50 +321,61 @@ export const executeWorkspaceActiveTab = async (
 // 3. SECURE PARAMETERIZED COMPILER (STAGE 2 COMPACT SPECIFICATION ENFORCEMENT)
 // ─────────────────────────────────────────────────────────────────────────────
 const compileCardSpecToSQL = (spec: CardSpec, tableName: string, whereClause: string): { sql: string } => {
-  const where = whereClause ? `WHERE ${whereClause}` : '';
+  const where = whereClause ? (whereClause.trim().toUpperCase().startsWith('WHERE') ? whereClause : `WHERE ${whereClause}`) : '';
   // AlaSQL uses [bracket] quoting for identifiers, NOT backticks
   const q = (col: string) => `[${col}]`;
 
-  if (spec.kind === 'groupedAverage') {
-    return {
-      sql: `SELECT ${q(spec.groupColumn)} AS category, ${spec.aggType.toUpperCase()}(${q(spec.metricColumn)}) AS value
-            FROM ${q(tableName)}
-            ${where}
-            GROUP BY ${q(spec.groupColumn)}
-            ORDER BY value DESC`
-    };
+  if (spec && 'kind' in spec) {
+    if (spec.kind === 'groupedAverage') {
+      return {
+        sql: `SELECT ${q(spec.groupColumn)} AS [category], ${spec.aggType.toUpperCase()}(${q(spec.metricColumn)}) AS [value]
+              FROM ${q(tableName)}
+              ${where}
+              GROUP BY ${q(spec.groupColumn)}
+              ORDER BY [value] DESC`
+      };
+    }
+
+    if (spec.kind === 'correlation') {
+      return {
+        sql: `SELECT ${q(spec.xColumn)} AS [x], ${q(spec.yColumn)} AS [y]
+              FROM ${q(tableName)}
+              ${where}`
+      };
+    }
+
+    if (spec.kind === 'distribution') {
+      return {
+        sql: `SELECT ${q(spec.metricColumn)} AS [binRange], COUNT(*) AS [count]
+              FROM ${q(tableName)}
+              ${where}
+              GROUP BY ${q(spec.metricColumn)}
+              ORDER BY [count] DESC`
+      };
+    }
+
+    if (spec.kind === 'ranking') {
+      return {
+        sql: `SELECT ${q(spec.categoryColumn)} AS [category], AVG(${q(spec.metricColumn)}) AS [value]
+              FROM ${q(tableName)}
+              ${where}
+              GROUP BY ${q(spec.categoryColumn)}
+              ORDER BY [value] ${spec.sort.toUpperCase()}
+              LIMIT ${spec.limit}`
+      };
+    }
+
+    if (spec.kind === 'genderSummary') {
+      return {
+        sql: `SELECT [gender], AVG([sleep_hours]) AS [avg_sleep_hours], AVG([age]) AS [avg_age], COUNT(*) AS [count]
+              FROM ${q(tableName)}
+              ${where}
+              GROUP BY [gender]`
+      };
+    }
   }
 
-  if (spec.kind === 'correlation') {
-    return {
-      sql: `SELECT ${q(spec.xColumn)} AS x, ${q(spec.yColumn)} AS y
-            FROM ${q(tableName)}
-            ${where}`
-    };
-  }
-
-  if (spec.kind === 'distribution') {
-    return {
-      sql: `SELECT ${q(spec.metricColumn)} AS binRange, COUNT(*) AS count
-            FROM ${q(tableName)}
-            ${where}
-            GROUP BY ${q(spec.metricColumn)}
-            ORDER BY count DESC`
-    };
-  }
-
-  if (spec.kind === 'ranking') {
-    return {
-      sql: `SELECT ${q(spec.categoryColumn)} AS category, AVG(${q(spec.metricColumn)}) AS value
-            FROM ${q(tableName)}
-            ${where}
-            GROUP BY ${q(spec.categoryColumn)}
-            ORDER BY value ${spec.sort.toUpperCase()}
-            LIMIT ${spec.limit}`
-    };
-  }
-
-  throw new Error(`Unsupported CardSpec kind: ${(spec as any).kind}`);
+  throw new Error(`Unsupported CardSpec kind: ${(spec as any).kind || (spec as any).type}`);
 };
 
 
@@ -271,9 +383,17 @@ const compileCardSpecToSQL = (spec: CardSpec, tableName: string, whereClause: st
 // 4. STATISTICAL CALCULATOR & VISUAL CONTRACT ADAPTER (STAGE 4 COMPLIANCE)
 // ─────────────────────────────────────────────────────────────────────────────
 const mapCardRowsToVisualContract = (card: CardDefinition, rows: any[]): VisualContract => {
-  const kind = card.spec.kind;
+  const spec = card.spec;
+  if (!spec || !('kind' in spec)) {
+    return {
+      kind: 'tableRows',
+      schemaVersion: 1,
+      data: rows,
+      columns: Object.keys(rows[0] || {})
+    };
+  }
 
-  if (kind === 'groupedAverage' || kind === 'ranking') {
+  if (spec.kind === 'groupedAverage') {
     const payload = rows.map(r => ({
       category: String(r.category ?? 'Unknown'),
       value: Number(r.value || 0)
@@ -282,12 +402,59 @@ const mapCardRowsToVisualContract = (card: CardDefinition, rows: any[]): VisualC
       kind: 'groupedAverages',
       schemaVersion: 1,
       data: payload,
-      xAxisLabel: card.spec.kind === 'groupedAverage' ? card.spec.groupColumn : (card.spec as any).categoryColumn,
-      yAxisLabel: card.spec.metricColumn
+      xAxisLabel: spec.groupColumn,
+      yAxisLabel: spec.metricColumn
     };
   }
 
-  if (kind === 'correlation') {
+  if (spec.kind === 'genderSummary') {
+    const payload = rows.map(r => ({
+      gender: String(r.gender ?? 'Unknown'),
+      avg_sleep_hours: Number(r.avg_sleep_hours || 0),
+      avg_age: Number(r.avg_age || 0),
+      count: Number(r.count || 0)
+    }));
+
+    if (payload.length > 0) {
+      let totalSleepSum = 0;
+      let totalAgeSum = 0;
+      let totalCount = 0;
+      payload.forEach(p => {
+        totalSleepSum += p.avg_sleep_hours * p.count;
+        totalAgeSum += p.avg_age * p.count;
+        totalCount += p.count;
+      });
+      payload.push({
+        gender: 'Total',
+        avg_sleep_hours: totalCount > 0 ? parseFloat((totalSleepSum / totalCount).toFixed(2)) : 0,
+        avg_age: totalCount > 0 ? parseFloat((totalAgeSum / totalCount).toFixed(2)) : 0,
+        count: totalCount
+      });
+    }
+
+    return {
+      kind: 'tableRows',
+      schemaVersion: 1,
+      data: payload,
+      columns: ['gender', 'avg_sleep_hours', 'avg_age', 'count']
+    };
+  }
+
+  if (spec.kind === 'ranking') {
+    const payload = rows.map(r => ({
+      category: String(r.category ?? 'Unknown'),
+      value: Number(r.value || 0)
+    }));
+    return {
+      kind: 'groupedAverages',
+      schemaVersion: 1,
+      data: payload,
+      xAxisLabel: spec.categoryColumn,
+      yAxisLabel: spec.metricColumn
+    };
+  }
+
+  if (spec.kind === 'correlation') {
     const payload = rows
       .filter(r => r.x !== null && r.y !== null && !isNaN(Number(r.x)) && !isNaN(Number(r.y)))
       .map(r => ({
@@ -332,22 +499,56 @@ const mapCardRowsToVisualContract = (card: CardDefinition, rows: any[]): VisualC
       rValue,
       pValue,
       trendSlope,
-      xAxisLabel: card.spec.xColumn,
-      yAxisLabel: card.spec.yColumn
+      xAxisLabel: spec.xColumn,
+      yAxisLabel: spec.yColumn
     };
   }
 
-  if (kind === 'distribution') {
+  if (spec.kind === 'distribution') {
     const payload = rows.map(r => ({
       binRange: String(r.binRange ?? 'Empty'),
       count: Number(r.count || 0)
     }));
+
+    const getOrdinalRank = (val: string): number => {
+      const v = val.trim().toLowerCase();
+      const scales: Record<string, number> = {
+        'normal': 1,
+        'minimal': 2,
+        'low': 3,
+        'mild': 4,
+        'moderate': 5,
+        'high': 6,
+        'severe': 7,
+        'extreme': 8,
+        'poor': 10,
+        'fair': 11,
+        'good': 12,
+        'excellent': 13,
+        'male': 20,
+        'female': 21,
+        'other': 22,
+        'unknown': 23
+      };
+      return scales[v] ?? 999;
+    };
+
+    const hasOrdinal = payload.some(p => getOrdinalRank(p.binRange) !== 999);
+    if (hasOrdinal) {
+      payload.sort((a, b) => {
+        const rankA = getOrdinalRank(a.binRange);
+        const rankB = getOrdinalRank(b.binRange);
+        if (rankA !== rankB) return rankA - rankB;
+        return a.binRange.localeCompare(b.binRange);
+      });
+    }
+
     return {
       kind: 'distributionBins',
       schemaVersion: 1,
       data: payload,
-      metricName: card.spec.metricColumn,
-      xAxisLabel: card.spec.metricColumn,
+      metricName: spec.metricColumn,
+      xAxisLabel: spec.metricColumn,
       yAxisLabel: 'Record Count'
     };
   }

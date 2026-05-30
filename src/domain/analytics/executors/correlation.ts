@@ -103,6 +103,11 @@ export const CorrelationExecutor = {
       };
     }
 
+    const points = cleanRows.map(r => ({
+      x: Number(r[metric]),
+      y: Number(r[target])
+    }));
+
     return {
       status: cleanRows.length < 5 ? 'partial_small_n' : 'success',
       rows: [{
@@ -110,6 +115,7 @@ export const CorrelationExecutor = {
         pValue: pVal,
         method,
         sampleSize: cleanRows.length,
+        points,
       }],
       metadata: {
         metric,

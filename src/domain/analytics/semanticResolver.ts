@@ -25,8 +25,10 @@ export const SemanticResolver = {
       return [];
     }
 
-    // Clean question: lowercase and strip punctuation except underscores
-    const cleanQ = question.toLowerCase().replace(/[?.,/#!$%^&*;:{}=\-_`~()]/g, ' ');
+    // Clean question: lowercase and strip punctuation.
+    // IMPORTANT: do NOT strip underscores (_) here — column names like physical_activity
+    // use underscores and must survive as single tokens for schema matching.
+    const cleanQ = question.toLowerCase().replace(/[?.,/#!$%^&*;:{}=\-`~()]/g, ' ');
     const words = cleanQ.split(/\s+/).filter(w => w.length > 0);
 
     const resolved: ResolvedColumn[] = [];
@@ -67,13 +69,18 @@ export const SemanticResolver = {
       }
     }
 
-    // 2. Also try matching with underscores for words (in case user typed "sleep_hours")
+    // 2. Also try joining adjacent words with underscores to catch patterns like
+    //    "physical activity" → "physical_activity" (typed with a space instead of underscore).
+    //    This covers the case where the user writes column names with spaces.
     for (let n = Math.min(3, words.length); n >= 1; n--) {
       for (let i = 0; i <= words.length - n; i++) {
-        const term = words.slice(i, i + n).join('_');
-        const match = SchemaIntelligence.resolveColumn(term, profile);
+        const underscoredTerm = words.slice(i, i + n).join('_');
+        // Skip if it's the same as the space-joined term (already matched above)
+        const spacedTerm = words.slice(i, i + n).join(' ');
+        if (underscoredTerm === spacedTerm) continue;
+        const match = SchemaIntelligence.resolveColumn(underscoredTerm, profile);
         if (match) {
-          addMatch(term.replace(/_/g, ' '), match);
+          addMatch(spacedTerm, match);
         }
       }
     }
@@ -83,7 +90,9 @@ export const SemanticResolver = {
       if (col.uniqueValues) {
         for (const val of col.uniqueValues) {
           const valStr = String(val).toLowerCase().trim();
-          if (valStr.length > 0 && cleanQ.includes(valStr)) {
+          const escapedVal = valStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const wordRegex = new RegExp(`\\b${escapedVal}\\b`, 'i');
+          if (valStr.length > 0 && wordRegex.test(cleanQ)) {
             addMatch(valStr, {
               columnName: col.name,
               confidence: 0.90,
@@ -106,7 +115,10 @@ export const SemanticResolver = {
       return [];
     }
 
-    const cleanQ = question.toLowerCase().replace(/[?.,/#!$%^&*;:{}=\-_`~()]/g, ' ');
+    const resolvedCols = new Set(this.resolve(question, profile).map(r => r.columnName.toLowerCase()));
+
+    // Consistent with resolve(): do NOT strip underscores so column names survive intact.
+    const cleanQ = question.toLowerCase().replace(/[?.,/#!$%^&*;:{}=\-`~()]/g, ' ');
     const words = cleanQ.split(/\s+/).filter(w => w.length > 0);
     const missing: string[] = [];
 
@@ -114,6 +126,9 @@ export const SemanticResolver = {
     const checkTerm = (term: string) => {
       const rawMatch = ColumnResolver.resolve(term, profile);
       if (rawMatch && rawMatch.strategy === 'fuzzy') {
+        if (resolvedCols.has(rawMatch.columnName.toLowerCase())) {
+          return;
+        }
         const gatedMatch = SchemaIntelligence.resolveColumn(term, profile);
         if (!gatedMatch) {
           missing.push(term);
@@ -139,7 +154,6 @@ export const SemanticResolver = {
 
     // Also: check for words with underscores or words ending in level/hours/label/time/usage
     // that did not resolve to any column
-    const resolvedCols = new Set(this.resolve(question, profile).map(r => r.columnName.toLowerCase()));
     const allColNames = new Set(profile.columns.map(c => c.name.toLowerCase()));
     const suffixes = ['level', 'hours', 'label', 'time', 'usage'];
 

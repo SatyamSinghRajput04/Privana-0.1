@@ -102,6 +102,7 @@ export type AnalyticsResult =
   | {
       status: 'blocked';
       reason: string;
+      bypassAllowed?: boolean;
       provenance: Provenance;
     }
   | {
@@ -143,11 +144,12 @@ export type CorrelationPayload = { x: number; y: number }[];
 export type TableRowsPayload = any[];
 export type DistributionPayload = { binRange: string; count: number }[];
 
-export type VisualContract =
+export type VisualContract = (
   | { kind: 'groupedAverages';   schemaVersion: 1; data: GroupedAveragesPayload; xAxisLabel?: string; yAxisLabel?: string }
   | { kind: 'correlationSummary';schemaVersion: 1; data: CorrelationPayload; rValue: number; pValue: number; trendSlope: number; xAxisLabel?: string; yAxisLabel?: string }
   | { kind: 'tableRows';         schemaVersion: 1; data: TableRowsPayload; columns: string[] }
-  | { kind: 'distributionBins';  schemaVersion: 1; data: DistributionPayload; metricName: string; xAxisLabel?: string; yAxisLabel?: string };
+  | { kind: 'distributionBins';  schemaVersion: 1; data: DistributionPayload; metricName: string; xAxisLabel?: string; yAxisLabel?: string }
+) & { notes?: string; lastComputedAt?: number };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SPEC V2.0 WORKSPACE ENGINE: WORKSPACE BLUEPRINT & CARD SPECIFICATION
@@ -156,12 +158,16 @@ export type CardSpec =
   | { kind: 'groupedAverage'; metricColumn: string; groupColumn: string; aggType: 'avg' | 'sum' | 'count'; }
   | { kind: 'correlation'; xColumn: string; yColumn: string; }
   | { kind: 'distribution'; metricColumn: string; binCount: number; }
-  | { kind: 'ranking'; metricColumn: string; categoryColumn: string; limit: number; sort: 'asc' | 'desc'; };
+  | { kind: 'ranking'; metricColumn: string; categoryColumn: string; limit: number; sort: 'asc' | 'desc'; }
+  | { kind: 'genderSummary'; }
+  | { type: 'kpi'; value: string | number; sub?: string; }
+  | { type: 'table'; rows: any[]; }
+  | { type: 'narrative'; text: string; provenance?: Provenance; };
 
 export interface CardDefinition {
   id: string;
   title: string;
-  chartType: 'bar' | 'line' | 'scatter' | 'table' | 'kpi';
+  chartType: 'bar' | 'line' | 'scatter' | 'table' | 'kpi' | 'pie' | 'donut';
   spec: CardSpec;
 }
 

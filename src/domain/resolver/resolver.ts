@@ -82,16 +82,39 @@ export const ColumnResolver = {
 
     // 2. Alias / Synonym Matching
     for (const [key, aliases] of Object.entries(COMMON_ALIASES)) {
-      if (t.includes(key) || key.includes(t)) {
-        // Find matching columns from aliases
-        const aliasCol = columns.find(c => 
-          aliases.some(alias => c.name.toLowerCase() === alias.toLowerCase() || c.name.toLowerCase().includes(alias.toLowerCase()))
-        );
-        if (aliasCol) {
+      // Ensure we don't do substring matches of key inside unrelated words (e.g. "age" inside "average")
+      const termWords = term.toLowerCase().split(/[\s_]+/);
+      const isKeyMatch = termWords.some(w => w === key) || key === t;
+      if (isKeyMatch) {
+        // Score candidates and pick the best one
+        let bestCol = null;
+        let bestScore = 0;
+
+        for (const c of columns) {
+          const cName = c.name.toLowerCase();
+          for (const alias of aliases) {
+            const cleanAlias = alias.toLowerCase();
+            let score = 0;
+            if (cName === cleanAlias) {
+              score = 3; // Exact match
+            } else if (cName.startsWith(cleanAlias + '_') || cName.endsWith('_' + cleanAlias)) {
+              score = 2; // Exact word boundary match
+            } else if (cName.includes(cleanAlias)) {
+              score = 1; // Substring match
+            }
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestCol = c;
+            }
+          }
+        }
+
+        if (bestCol) {
           return {
             term,
-            columnName: aliasCol.name,
-            type: aliasCol.type,
+            columnName: bestCol.name,
+            type: bestCol.type,
             strategy: 'alias',
             confidence: 0.9
           };
@@ -100,21 +123,39 @@ export const ColumnResolver = {
     }
 
     // 3. Synonym matches based on columns names
-    const synonymCol = columns.find(c => {
-      const cName = c.name.toLowerCase();
-      return (
-        (t === 'sleep' && (cName.includes('sleep') || cName.includes('nap') || cName.includes('rest'))) ||
-        (t === 'stress' && (cName.includes('stress') || cName.includes('anx') || cName.includes('anxiety') || cName.includes('depress'))) ||
-        (t === 'platform' && (cName.includes('plat') || cName.includes('app') || cName.includes('social') || cName.includes('media'))) ||
-        (t === 'screentime' && (cName.includes('screen') || cName.includes('device') || cName.includes('hours') || cName.includes('usage')))
-      );
-    });
+    let bestSynCol = null;
+    let bestSynScore = 0;
 
-    if (synonymCol) {
+    for (const c of columns) {
+      const cName = c.name.toLowerCase();
+      let score = 0;
+
+      if (t === 'sleep') {
+        if (cName === 'sleep' || cName.startsWith('sleep_') || cName.endsWith('_sleep')) score = 3;
+        else if (cName.includes('sleep') || cName.includes('nap') || cName.includes('rest')) score = 1;
+      } else if (t === 'stress') {
+        if (cName === 'stress' || cName.startsWith('stress_') || cName.endsWith('_stress')) score = 3;
+        else if (cName.includes('stress') || cName.includes('anx') || cName.includes('anxiety') || cName.includes('depress')) score = 1;
+      } else if (t === 'platform') {
+        if (cName === 'platform' || cName.startsWith('platform_') || cName.endsWith('_platform')) score = 3;
+        else if (cName.startsWith('plat')) score = 2;
+        else if (cName.includes('plat') || cName.includes('app') || cName.includes('social') || cName.includes('media')) score = 1;
+      } else if (t === 'screentime') {
+        if (cName === 'screentime' || cName.startsWith('screen_') || cName.endsWith('_sleep')) score = 3;
+        else if (cName.includes('screen') || cName.includes('device') || cName.includes('hours') || cName.includes('usage')) score = 1;
+      }
+
+      if (score > bestSynScore) {
+        bestSynScore = score;
+        bestSynCol = c;
+      }
+    }
+
+    if (bestSynCol) {
       return {
         term,
-        columnName: synonymCol.name,
-        type: synonymCol.type,
+        columnName: bestSynCol.name,
+        type: bestSynCol.type,
         strategy: 'synonym',
         confidence: 0.85
       };

@@ -1788,7 +1788,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   // Trigger workspace tab execution when active tab or filters change
   // Dedup guard: skip re-execution when the dep array fires but the actual
   // payload hasn't changed (e.g., Zustand object-identity false positives).
-  const lastRunSignatureRef = React.useRef<string>('');
+  const lastRunSignatureRef = useRef<string>('');
   useEffect(() => {
     if (workspacePipelineEnabled && selectedDataset && activeWorkspace && activeSheetId) {
       const sig = JSON.stringify({

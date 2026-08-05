@@ -68,8 +68,15 @@ export const ColumnResolver = {
 
     if (columns.length === 0) return null;
 
-    // 1. Exact / Direct Match
-    const exactMatch = columns.find(c => c.name.toLowerCase() === t || c.name.toLowerCase().replace(/[^a-z0-9_]/g, '') === t);
+    const stem = (w: string) => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) ? w.slice(0, -1) : w;
+    const stemCompound = (w: string) => w.split('_').map(stem).join('_');
+    const tStemmed = stemCompound(t);
+
+    // 1. Exact / Direct Match (including compound stemmed matches like "orders_id" -> "order_id")
+    const exactMatch = columns.find(c => {
+      const cClean = c.name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      return cClean === t || cClean === tStemmed || stemCompound(cClean) === tStemmed;
+    });
     if (exactMatch) {
       return {
         term,
@@ -80,11 +87,36 @@ export const ColumnResolver = {
       };
     }
 
+    // 1.5 Entity-to-ID Match (e.g. "orders" / "order" -> "order_id", "reviews" -> "review_id")
+    const tSingleWordStem = stem(t);
+    if (tSingleWordStem.length >= 3) {
+      const entityIdMatch = columns.find(c => {
+        const cClean = c.name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+        return (
+          cClean === `${tSingleWordStem}_id` ||
+          cClean === `id_${tSingleWordStem}` ||
+          cClean === `${tSingleWordStem}s_id` ||
+          cClean === `${tSingleWordStem}_score` ||
+          cClean === `${tSingleWordStem}_count` ||
+          cClean === `${tSingleWordStem}_total`
+        );
+      });
+      if (entityIdMatch) {
+        return {
+          term,
+          columnName: entityIdMatch.name,
+          type: entityIdMatch.type,
+          strategy: 'alias',
+          confidence: 0.95
+        };
+      }
+    }
+
     // 2. Alias / Synonym Matching
     for (const [key, aliases] of Object.entries(COMMON_ALIASES)) {
       // Ensure we don't do substring matches of key inside unrelated words (e.g. "age" inside "average")
       const termWords = term.toLowerCase().split(/[\s_]+/);
-      const isKeyMatch = termWords.some(w => w === key) || key === t;
+      const isKeyMatch = termWords.some(w => w === key || stem(w) === key) || key === t || key === stem(t);
       if (isKeyMatch) {
         // Score candidates and pick the best one
         let bestCol = null;
@@ -125,22 +157,23 @@ export const ColumnResolver = {
     // 3. Synonym matches based on columns names
     let bestSynCol = null;
     let bestSynScore = 0;
+    const tStem = stem(t);
 
     for (const c of columns) {
       const cName = c.name.toLowerCase();
       let score = 0;
 
-      if (t === 'sleep') {
+      if (tStem === 'sleep') {
         if (cName === 'sleep' || cName.startsWith('sleep_') || cName.endsWith('_sleep')) score = 3;
         else if (cName.includes('sleep') || cName.includes('nap') || cName.includes('rest')) score = 1;
-      } else if (t === 'stress') {
+      } else if (tStem === 'stress') {
         if (cName === 'stress' || cName.startsWith('stress_') || cName.endsWith('_stress')) score = 3;
         else if (cName.includes('stress') || cName.includes('anx') || cName.includes('anxiety') || cName.includes('depress')) score = 1;
-      } else if (t === 'platform') {
+      } else if (tStem === 'platform') {
         if (cName === 'platform' || cName.startsWith('platform_') || cName.endsWith('_platform')) score = 3;
         else if (cName.startsWith('plat')) score = 2;
         else if (cName.includes('plat') || cName.includes('app') || cName.includes('social') || cName.includes('media')) score = 1;
-      } else if (t === 'screentime') {
+      } else if (tStem === 'screentime') {
         if (cName === 'screentime' || cName.startsWith('screen_') || cName.endsWith('_sleep')) score = 3;
         else if (cName.includes('screen') || cName.includes('device') || cName.includes('hours') || cName.includes('usage')) score = 1;
       }

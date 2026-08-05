@@ -69,9 +69,10 @@ export const SCHEMA_PROFILES: Record<string, SchemaContract> = {};
 
 function getStringHash(str: string): string {
   let hash = 2166136261;
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i);
-    // Multiply by FNV prime (using bitwise ops for JS integer range)
+  // Sub-millisecond hashing for large files by sampling head, tail, and length
+  const sample = str.length > 10000 ? str.slice(0, 5000) + str.slice(-5000) + str.length : str;
+  for (let i = 0; i < sample.length; i++) {
+    hash ^= sample.charCodeAt(i);
     hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
   }
   return (hash >>> 0).toString(16);
@@ -90,33 +91,33 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
     return contract;
   }
 
-  const columns = Object.keys(data[0]);
+  const columns = Object.keys(data[0] || {});
   const colSpecs: ColumnSpec[] = [];
 
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
   const dateTimePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
 
+  // High-performance representative sampling (max 2,000 rows for schema sniffing)
+  const sampleSize = Math.min(rowCount, 2000);
+
   for (const colName of columns) {
-    let nullCount = 0;
-    const values: any[] = [];
-    let originalType = 'string';
+    let nullCountInSample = 0;
+    const sampleValues: any[] = [];
     let coercedType = 'string';
     let coercedExample = '';
 
-    for (let i = 0; i < rowCount; i++) {
+    for (let i = 0; i < sampleSize; i++) {
       let val = data[i][colName];
 
-      // Stage 0 Ingestion: Null Coercion
+      // Null check
       if (val === null || val === undefined || val === '' || (typeof val === 'string' && val.trim() === '')) {
-        data[i][colName] = null;
-        nullCount++;
+        nullCountInSample++;
         continue;
       }
 
       if (typeof val === 'number') {
         if (isNaN(val) || !isFinite(val)) {
-          data[i][colName] = null;
-          nullCount++;
+          nullCountInSample++;
           continue;
         }
       }
@@ -129,8 +130,6 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
             const d = new Date(trimmed);
             if (!isNaN(d.getTime())) {
               const iso = d.toISOString();
-              data[i][colName] = iso;
-              originalType = 'string';
               coercedType = 'date';
               coercedExample = trimmed;
               val = iso;
@@ -141,17 +140,17 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
         }
       }
 
-      values.push(val);
+      sampleValues.push(val);
     }
 
-    const nonNullCount = values.length;
+    const nonNullCount = sampleValues.length;
     let inferredType: ColumnSpec['type'] = 'string';
     let role: ColumnSpec['role'] = 'unknown';
 
     if (nonNullCount > 0) {
-      const numbers = values.filter(v => typeof v === 'number');
-      const booleans = values.filter(v => typeof v === 'boolean');
-      const dates = values.filter(v => typeof v === 'string' && (datePattern.test(v) || dateTimePattern.test(v) || v.endsWith('Z')));
+      const numbers = sampleValues.filter(v => typeof v === 'number');
+      const booleans = sampleValues.filter(v => typeof v === 'boolean');
+      const dates = sampleValues.filter(v => typeof v === 'string' && (datePattern.test(v) || dateTimePattern.test(v) || v.endsWith('Z')));
 
       if (numbers.length > nonNullCount * 0.7) {
         const isAllInt = numbers.every(n => Number.isInteger(n));
@@ -169,17 +168,18 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
       }
     }
 
-    const uniqueValues = new Set(values);
+    const uniqueValues = new Set(sampleValues);
     const cardinality = uniqueValues.size;
+    const estimatedNullCount = Math.round((nullCountInSample / sampleSize) * rowCount);
 
     const spec: ColumnSpec = {
       name: colName,
       type: inferredType,
-      nullable: nullCount > 0,
+      nullable: estimatedNullCount > 0,
       role,
       cardinality: cardinality < 100 ? cardinality : undefined,
-      nullCount,
-      originalType,
+      nullCount: estimatedNullCount,
+      originalType: 'string',
       coercedType: coercedType !== 'string' ? coercedType : undefined,
       coercedExample: coercedExample || undefined
     };
@@ -207,16 +207,16 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
 export function loadCSV(filename: string, csvContent: string): Promise<any[]> {
   return new Promise((resolve, reject) => {
     // 1. File size check (100MB cap)
-    const byteSize = new Blob([csvContent]).size;
+    const byteSize = csvContent.length; // Approximate UTF-8 size
     if (byteSize > 100 * 1024 * 1024) {
       return reject(new Error(`Duplicate and/or overflow Column check failed: File size exceeds the strict cap of 100 MB (size: ${(byteSize / (1024 * 1024)).toFixed(1)} MB).`));
     }
 
-    // 2. Headers count & uniqueness checks
-    const lines = csvContent.split(/\r?\n/).filter(Boolean);
-    if (lines.length > 0) {
-      const firstLine = lines[0];
-      const parsedHeader = Papa.parse(firstLine).data[0] as string[];
+    // 2. Headers count & uniqueness checks (slice first line without splitting full string)
+    const firstNewline = csvContent.indexOf('\n');
+    const firstLine = firstNewline !== -1 ? csvContent.slice(0, firstNewline) : csvContent;
+    if (firstLine.trim()) {
+      const parsedHeader = Papa.parse(firstLine.trim()).data[0] as string[];
       if (parsedHeader && parsedHeader.length > 0) {
         if (parsedHeader.length > 500) {
           return reject(new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${parsedHeader.length} columns).`));
@@ -244,23 +244,10 @@ export function loadCSV(filename: string, csvContent: string): Promise<any[]> {
           console.warn('CSV parsing errors:', results.errors);
         }
 
-        // UTF-8 Clean Pass & Replacement of Invalid Character Sentinels
-        const cleanedData = results.data.map((row: any) => {
-          const newRow: any = {};
-          for (const key of Object.keys(row)) {
-            let val = row[key];
-            if (typeof val === 'string') {
-              val = val.replace(/[\uFFFD\u007F-\u009F]/g, '\uFFFD');
-            }
-            newRow[key] = val;
-          }
-          return newRow;
-        });
-
         try {
-          normalizeAndProfileData(filename, cleanedData, csvContent);
-          registerTable(filename, cleanedData);
-          resolve(cleanedData);
+          normalizeAndProfileData(filename, results.data, csvContent);
+          registerTable(filename, results.data);
+          resolve(results.data);
         } catch (e: any) {
           reject(e);
         }
@@ -403,315 +390,18 @@ export function isTableLoaded(tableName: string): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SMART LOCAL QUERY GENERATOR
+// LEGACY QUERY GENERATOR & INSIGHTS — REMOVED
 //
-// CRITICAL RULES for AlaSQL compatibility:
-// 1. ALL identifiers MUST use backticks (not square brackets)
-// 2. NEVER use "count" as an alias — it's a reserved word
-// 3. Use "cnt" or "record_count" instead
-// 4. All column names in backticks to avoid reserved word clashes
+// These functions have been removed as part of the Phase 1 pipeline unification.
+// All analytics computation now routes through the domain layer:
+//   src/domain/analytics/runAnalyticsQuestion.ts → IntentPlanner → Executors
+//
+// Removed functions:
+//   - classifyIntent() → replaced by IntentPlanner.plan()
+//   - stem(), getMatchScore(), findMentionedColumns() → replaced by SemanticResolver
+//   - generateLocalQuery() → replaced by domain executors
+//   - generateInsights() → replaced by narrative compiler in runAnalyticsQuestion
 // ─────────────────────────────────────────────────────────────────────────────
-interface QueryResult {
-  sql: string;
-  chartType: string;
-  intent: string;
-}
-
-function classifyIntent(question: string): string {
-  const ql = question.toLowerCase();
-  if (/correlat|scatter|relationship|related|vs\s|versus/.test(ql)) return 'correlation';
-  if (/histogram|distribution\s+of|frequency|spread|percentile|quartile|median/.test(ql)) return 'distribution';
-  if (/trend|monthly|weekly|daily|over\s+time|by\s+month|by\s+week|time\s*series|year|quarter/.test(ql)) return 'timeseries';
-  if (/top\s|highest|best|most|bottom\s|lowest|worst|least|rank/.test(ql)) return 'ranking';
-  if (/compare|margin|ratio|growth|change/.test(ql)) return 'comparison';
-  if (/breakdown|share|percent|proportion|composition|split|pie/.test(ql)) return 'composition';
-  if (/how\s+many|number\s+of|count\s+by/.test(ql)) return 'count';
-  if (/average|mean|avg|sum|total/.test(ql)) return 'aggregation';
-  return 'ranking';
-}
-
-function stem(word: string): string {
-  word = word.toLowerCase().trim();
-  // Strip trailing 's' to handle simple plurals, but avoid words naturally ending in double s like stress
-  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) {
-    return word.slice(0, -1);
-  }
-  return word;
-}
-
-function getMatchScore(colName: string, questionStems: string[], questionRaw: string): number {
-  const cl = colName.toLowerCase();
-  const clWords = cl.replace(/_/g, ' ');
-
-  // Use regex with word boundaries to prevent substring matching (e.g. "age" matching inside "average")
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const r1 = new RegExp('\\b' + esc(cl) + '\\b');
-  const r2 = new RegExp('\\b' + esc(clWords) + '\\b');
-
-  if (r1.test(questionRaw) || r2.test(questionRaw)) {
-    return 2.0;
-  }
-
-  const colWords = colName.split(/[_\s]+/).map(w => w.trim()).filter(Boolean);
-  const colStems = colWords.map(stem);
-
-  // Calculate intersection of stems
-  let matches = 0;
-  for (const stemVal of colStems) {
-    if (questionStems.includes(stemVal)) {
-      matches++;
-    }
-  }
-
-  if (matches === 0) return 0;
-
-  // Single word columns must match exactly
-  if (colStems.length === 1) {
-    return matches === 1 ? 1.0 : 0;
-  }
-
-  // Multi-word columns score by match density
-  const ratio = matches / colStems.length;
-
-  // If we match all words of a compound column name (e.g. "sleep hour" matching "sleep_hours"), boost it
-  if (matches === colStems.length) {
-    return 1.8;
-  }
-
-  // Require at least 50% of the column words to match to avoid weak/spurious matches
-  if (ratio >= 0.5) {
-    return ratio;
-  }
-
-  return 0;
-}
-
-function findMentionedColumns(question: string, schema: ColumnInfo[]): ColumnInfo[] {
-  const ql = question.toLowerCase();
-  
-  // Clean question punctuation and extract word stems
-  const qWords = ql.split(/[^a-z0-9_]+/).map(w => w.trim()).filter(Boolean);
-  const qStems = qWords.map(stem);
-
-  const scored = schema.map(col => {
-    const score = getMatchScore(col.name, qStems, ql);
-    return { col, score };
-  });
-
-  return scored
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map(x => x.col);
-}
-
-export function generateLocalQuery(question: string, tableName: string): QueryResult {
-  const tbl = getSqlTableName(tableName);
-  const T = q(tbl); // backtick-quoted table name
-  const schema = getTableSchema(tableName);
-
-  if (schema.length === 0) {
-    return { sql: `SELECT * FROM ${T} LIMIT 20`, chartType: 'bar', intent: 'unknown' };
-  }
-
-  const intent = classifyIntent(question);
-  const mentioned = findMentionedColumns(question, schema);
-
-  const numCols = schema.filter(c => c.type === 'number');
-  const strCols = schema.filter(c => c.type === 'string');
-  const dateCols = schema.filter(c => c.type === 'date');
-
-  const mentionedNum = mentioned.filter(c => c.type === 'number');
-  const mentionedStr = mentioned.filter(c => c.type === 'string');
-
-  // Pick the best columns
-  const groupCol = mentionedStr[0]?.name || strCols[0]?.name;
-  const valueCol = mentionedNum[0]?.name || numCols[0]?.name;
-  const valueCol2 = mentionedNum[1]?.name || numCols[1]?.name;
-  const dateCol = dateCols[0]?.name;
-
-  // Extract LIMIT from question
-  const limitMatch = question.match(/\b(\d+)\b/);
-  const limit = limitMatch ? Math.min(parseInt(limitMatch[1]), 50) : 15;
-
-  switch (intent) {
-    case 'ranking': {
-      if (groupCol && valueCol) {
-        return {
-          sql: `SELECT ${q(groupCol)}, SUM(${q(valueCol)}) AS ${q('total_' + valueCol)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(groupCol)} IS NOT NULL GROUP BY ${q(groupCol)} ORDER BY ${q('total_' + valueCol)} DESC LIMIT ${limit}`,
-          chartType: 'bar', intent
-        };
-      }
-      if (groupCol) {
-        return {
-          sql: `SELECT ${q(groupCol)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(groupCol)} IS NOT NULL GROUP BY ${q(groupCol)} ORDER BY ${q('cnt')} DESC LIMIT ${limit}`,
-          chartType: 'bar', intent
-        };
-      }
-      if (valueCol) {
-        return {
-          sql: `SELECT * FROM ${T} ORDER BY ${q(valueCol)} DESC LIMIT ${limit}`,
-          chartType: 'bar', intent
-        };
-      }
-      break;
-    }
-
-    case 'count': {
-      const col = groupCol || strCols[0]?.name;
-      if (col) {
-        return {
-          sql: `SELECT ${q(col)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(col)} IS NOT NULL GROUP BY ${q(col)} ORDER BY ${q('cnt')} DESC`,
-          chartType: 'bar', intent
-        };
-      }
-      break;
-    }
-
-    case 'composition': {
-      const col = groupCol || strCols[0]?.name;
-      if (col && valueCol) {
-        return {
-          sql: `SELECT ${q(col)}, SUM(${q(valueCol)}) AS ${q('total')} FROM ${T} WHERE ${q(col)} IS NOT NULL GROUP BY ${q(col)} ORDER BY ${q('total')} DESC`,
-          chartType: 'pie', intent
-        };
-      }
-      if (col) {
-        return {
-          sql: `SELECT ${q(col)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(col)} IS NOT NULL GROUP BY ${q(col)} ORDER BY ${q('cnt')} DESC`,
-          chartType: 'pie', intent
-        };
-      }
-      break;
-    }
-
-    case 'comparison': {
-      if (groupCol && valueCol && valueCol2) {
-        return {
-          sql: `SELECT ${q(groupCol)}, SUM(${q(valueCol)}) AS ${q(valueCol)}, SUM(${q(valueCol2)}) AS ${q(valueCol2)} FROM ${T} WHERE ${q(groupCol)} IS NOT NULL GROUP BY ${q(groupCol)} ORDER BY 2 DESC LIMIT 15`,
-          chartType: 'bar', intent
-        };
-      }
-      if (groupCol && valueCol) {
-        return {
-          sql: `SELECT ${q(groupCol)}, SUM(${q(valueCol)}) AS ${q('total')}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(groupCol)} IS NOT NULL GROUP BY ${q(groupCol)} ORDER BY ${q('total')} DESC LIMIT 15`,
-          chartType: 'bar', intent
-        };
-      }
-      break;
-    }
-
-    case 'timeseries': {
-      if (dateCol && valueCol) {
-        return {
-          sql: `SELECT ${q(dateCol)}, SUM(${q(valueCol)}) AS ${q('total')}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(dateCol)} IS NOT NULL GROUP BY ${q(dateCol)} ORDER BY ${q(dateCol)}`,
-          chartType: 'line', intent
-        };
-      }
-      if (dateCol) {
-        return {
-          sql: `SELECT ${q(dateCol)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(dateCol)} IS NOT NULL GROUP BY ${q(dateCol)} ORDER BY ${q(dateCol)}`,
-          chartType: 'line', intent
-        };
-      }
-      break;
-    }
-
-    case 'correlation': {
-      const x = mentionedNum[0]?.name || numCols[0]?.name;
-      const y = mentionedNum[1]?.name || numCols[1]?.name;
-      if (x && y) {
-        return {
-          sql: `SELECT ${q(x)} AS ${q('x_value')}, ${q(y)} AS ${q('y_value')} FROM ${T} WHERE ${q(x)} IS NOT NULL AND ${q(y)} IS NOT NULL LIMIT 200`,
-          chartType: 'scatter', intent
-        };
-      }
-      break;
-    }
-
-    case 'distribution': {
-      const col = mentionedNum[0]?.name || numCols[0]?.name;
-      if (col) {
-        return {
-          sql: `SELECT ${q(col)} FROM ${T} WHERE ${q(col)} IS NOT NULL`,
-          chartType: 'bar', intent
-        };
-      }
-      break;
-    }
-
-    case 'aggregation': {
-      if (groupCol && valueCol) {
-        return {
-          sql: `SELECT ${q(groupCol)}, SUM(${q(valueCol)}) AS ${q('total')}, AVG(${q(valueCol)}) AS ${q('average')}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(groupCol)} IS NOT NULL GROUP BY ${q(groupCol)} ORDER BY ${q('total')} DESC LIMIT 20`,
-          chartType: 'bar', intent
-        };
-      }
-      if (groupCol) {
-        return {
-          sql: `SELECT ${q(groupCol)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(groupCol)} IS NOT NULL GROUP BY ${q(groupCol)} ORDER BY ${q('cnt')} DESC LIMIT 20`,
-          chartType: 'bar', intent
-        };
-      }
-      break;
-    }
-  }
-
-  // Fallback: group by first string column
-  if (strCols.length > 0) {
-    const col = strCols[0].name;
-    return {
-      sql: `SELECT ${q(col)}, COUNT(*) AS ${q('cnt')} FROM ${T} WHERE ${q(col)} IS NOT NULL GROUP BY ${q(col)} ORDER BY ${q('cnt')} DESC LIMIT 20`,
-      chartType: 'bar', intent
-    };
-  }
-
-  return { sql: `SELECT * FROM ${T} LIMIT 20`, chartType: 'bar', intent };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// INSIGHT GENERATOR — works on real data
-// ─────────────────────────────────────────────────────────────────────────────
-export function generateInsights(data: any[]): string[] {
-  if (!data || data.length === 0) return ['No data returned for this query.'];
-
-  const insights: string[] = [];
-  const keys = Object.keys(data[0]);
-  const numKeys = keys.filter(k => typeof data[0][k] === 'number');
-  const strKeys = keys.filter(k => typeof data[0][k] === 'string');
-
-  const catKey = strKeys[0];
-  const valKey = numKeys[0];
-
-  if (catKey && valKey && data.length > 0) {
-    const total = data.reduce((s, r) => s + (r[valKey] || 0), 0);
-    const topVal = data[0][valKey];
-    const topLabel = data[0][catKey];
-    const pct = total > 0 ? Math.round((topVal / total) * 100) : 0;
-
-    insights.push(`🥇 "${topLabel}" leads with ${Number(topVal).toLocaleString()} — ${pct}% of total`);
-
-    if (data.length >= 3) {
-      const top3Total = data.slice(0, 3).reduce((s, r) => s + (r[valKey] || 0), 0);
-      const top3Pct = total > 0 ? Math.round((top3Total / total) * 100) : 0;
-      insights.push(`📊 Top 3 account for ${top3Pct}% of total (${Number(top3Total).toLocaleString()})`);
-    }
-
-    if (data.length >= 2) {
-      const last = data[data.length - 1];
-      insights.push(`📉 Lowest: "${last[catKey]}" with ${Number(last[valKey]).toLocaleString()}`);
-    }
-  } else if (catKey && data.length > 0) {
-    insights.push(`📊 ${data.length} distinct values found`);
-    const cntKey = numKeys.find(k => k === 'cnt' || k === 'record_count') || numKeys[0];
-    if (cntKey) {
-      insights.push(`🥇 "${data[0][catKey]}" is most frequent with ${data[0][cntKey]} occurrences`);
-    }
-  }
-
-  insights.push(`🔒 Analysis executed locally — 0 bytes sent externally`);
-  insights.push(`⚡ Processed in-memory — no data left your device`);
-  return insights;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SQL EXECUTOR

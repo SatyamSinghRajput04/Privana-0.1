@@ -1,9 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/resultToVisualContext.ts
-// S10 RESULT-TO-VISUAL MAPPING — Maps AnalyticsResult to Chart/Visual metadata.
+// S10 RESULT-TO-VISUAL MAPPING — Maps AnalyticsResult to discriminated VisualContracts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { AnalyticsResult, VisualContract } from './types';
+import { AnalyticsResult, VisualContract, AxisSpec, SeriesSpec } from './types';
+import { resolveColumns, formatFieldName } from './schemaLookup';
+import { verifyContract } from './verifyContract';
 
 export interface VisualLayout {
   chartType: 'bar' | 'scatter' | 'line' | 'pie' | 'histogram' | 'none';
@@ -74,13 +76,13 @@ export const ResultToVisualContext = {
       if (stats) {
         kpis.push({
           label: 'Correlation (r)',
-          value: stats.r.toFixed(3),
-          subText: `${stats.method} method`,
-          color: Math.abs(stats.r) > 0.4 ? '#10b981' : '#f59e0b',
+          value: typeof stats.r === 'number' ? stats.r.toFixed(3) : '0.000',
+          subText: `${stats.method || 'Pearson'} method`,
+          color: Math.abs(stats.r || 0) > 0.4 ? '#10b981' : '#f59e0b',
         });
         kpis.push({
           label: 'Significance (p)',
-          value: stats.pValue.toFixed(4),
+          value: typeof stats.pValue === 'number' ? stats.pValue.toFixed(4) : '1.0000',
           subText: stats.pValue < 0.05 ? 'Statistically significant' : 'Not significant',
           color: stats.pValue < 0.05 ? '#10b981' : '#ef4444',
         });
@@ -102,7 +104,7 @@ export const ResultToVisualContext = {
         });
       }
     } else if (plan.intent === 'comparison') {
-      const sorted = [...rawRows].sort((a: any, b: any) => b.mean - a.mean);
+      const sorted = [...rawRows].sort((a: any, b: any) => (b.mean || 0) - (a.mean || 0));
       kpis.push({
         label: 'Groups Compared',
         value: rawRows.length,
@@ -110,7 +112,7 @@ export const ResultToVisualContext = {
         color: '#8b5cf6',
       });
       if (sorted.length >= 2) {
-        const diff = sorted[0].mean - sorted[sorted.length - 1].mean;
+        const diff = (sorted[0].mean || 0) - (sorted[sorted.length - 1].mean || 0);
         kpis.push({
           label: 'Max Difference',
           value: diff.toFixed(2),
@@ -141,50 +143,122 @@ export const ResultToVisualContext = {
 
 /**
  * SPEC V1.1 DISCRIMINATED VISUAL CONTRACT ADAPTER §1.2
+ * Maps AnalyticsResult to immutable, verified VisualContract.
  */
 export function mapToVisualContract(result: AnalyticsResult): VisualContract {
   if (result.status !== 'computed' && result.status !== 'partial') {
-    return { kind: 'tableRows', schemaVersion: 1, data: [], columns: [] };
+    return verifyContract({
+      kind: 'empty',
+      schemaVersion: 1,
+      reason: result.status === 'blocked' ? (result as any).reason || 'Query execution blocked by policy.'
+            : result.status === 'refused' ? (result as any).message || 'Query refused due to schema mismatch.'
+            : 'Result not computed.'
+    });
   }
 
-  const { data, plan } = result;
+  const { data, plan, provenance } = result;
   const rawRows = data?.rows || [];
 
+  if (!rawRows || rawRows.length === 0) {
+    return verifyContract({
+      kind: 'empty',
+      schemaVersion: 1,
+      reason: 'No rows returned for this query.'
+    });
+  }
+
+  const xAxisLabel = plan.groupBy?.[0] || plan.metric || 'Category';
+  const yAxisLabel = plan.metric ? `Average ${formatFieldName(plan.metric)}` : 'Value';
+
+  const xAxis: AxisSpec = { key: 'category', label: formatFieldName(xAxisLabel), vizType: 'category' };
+  const yAxis: AxisSpec = { key: 'value', label: formatFieldName(yAxisLabel), vizType: 'numeric' };
+  const series: SeriesSpec[] = [{ key: 'value', label: formatFieldName(yAxisLabel) }];
+
   switch (plan.intent) {
-    case 'comparison':
-    case 'ranking':
-    case 'feature_importance':
     case 'grouped_average': {
       const payload = rawRows.map(r => ({
-        category: String(r.category_label || r.rank_label || r.group_label || r.feature || Object.values(r)[0] || ''),
-        value: Number(r.average_value || r.metric_value || r.mean || r.avg || r.association || Object.values(r)[1] || 0)
+        category: String(r.category_label || Object.values(r)[0] || ''),
+        value: Number(r.average_value ?? r.avg ?? Object.values(r)[1] ?? 0)
       }));
-      return {
+      return verifyContract({
         kind: 'groupedAverages',
         schemaVersion: 1,
         data: payload,
-        xAxisLabel: plan.intent === 'feature_importance' ? 'Feature' : (plan.groupBy?.[0] || 'Category'),
-        yAxisLabel: plan.intent === 'feature_importance' ? 'Association Strength' : (plan.intent === 'ranking' ? `Ranked by ${plan.metric || 'Value'}` : `Average of ${plan.metric || 'Value'}`)
-      };
+        xAxis,
+        yAxis,
+        series,
+        xAxisLabel: xAxis.label,
+        yAxisLabel: yAxis.label
+      });
+    }
+
+    case 'comparison': {
+      const payload = rawRows.map(r => ({
+        category: String(r.group_label || r.category_label || Object.values(r)[0] || ''),
+        value: Number(r.mean ?? r.average_value ?? Object.values(r)[1] ?? 0)
+      }));
+      return verifyContract({
+        kind: 'comparisonSummary',
+        schemaVersion: 1,
+        data: payload,
+        xAxis: { ...xAxis, label: formatFieldName(plan.groupBy?.[0] || 'Group') },
+        yAxis: { ...yAxis, label: formatFieldName(`Mean ${plan.metric || 'Value'}`) },
+        series: [{ key: 'value', label: formatFieldName(`Mean ${plan.metric || 'Value'}`) }],
+        xAxisLabel: plan.groupBy?.[0] || 'Group',
+        yAxisLabel: `Mean ${plan.metric || 'Value'}`
+      });
+    }
+
+    case 'ranking': {
+      const payload = rawRows.map(r => ({
+        category: String(r.rank_label || r.category_label || Object.values(r)[0] || ''),
+        value: Number(r.metric_value ?? r.average_value ?? Object.values(r)[1] ?? 0)
+      }));
+      return verifyContract({
+        kind: 'rankingSummary',
+        schemaVersion: 1,
+        data: payload,
+        xAxis: { ...xAxis, label: formatFieldName(plan.groupBy?.[0] || 'Category') },
+        yAxis: { ...yAxis, label: formatFieldName(`Ranked by ${plan.metric || 'Value'}`) },
+        series: [{ key: 'value', label: formatFieldName(`Ranked by ${plan.metric || 'Value'}`) }],
+        xAxisLabel: plan.groupBy?.[0] || 'Category',
+        yAxisLabel: `Ranked by ${plan.metric || 'Value'}`
+      });
+    }
+
+    case 'feature_importance': {
+      const payload = rawRows.map(r => ({
+        feature: String(r.feature || Object.values(r)[0] || ''),
+        association: Number(r.association ?? Object.values(r)[1] ?? 0),
+        method: String(r.method || '')
+      }));
+      return verifyContract({
+        kind: 'featureImportance',
+        schemaVersion: 1,
+        data: payload,
+        xAxis: { key: 'feature', label: 'Feature', vizType: 'category' },
+        yAxis: { key: 'association', label: 'Association Strength', vizType: 'numeric' },
+        series: [{ key: 'association', label: 'Association Strength' }],
+        xAxisLabel: 'Feature',
+        yAxisLabel: 'Association Strength'
+      });
     }
 
     case 'correlation': {
       const stats = rawRows[0] || {};
       const points = stats.points || [];
       const payload = points.map((p: any) => ({
-        x: Number(p.x),
-        y: Number(p.y)
+        x: Number(p.x || 0),
+        y: Number(p.y || 0)
       }));
 
-      // Single-row / Empty boundary protections §1.4
       const pVal = typeof stats.pValue === 'number' ? stats.pValue : 1.0;
       const rVal = typeof stats.r === 'number' ? stats.r : 0.0;
       const slope = typeof stats.slope === 'number' ? stats.slope : 0.0;
-      // Embed sampleSize and method so contextual card footer can display correct n
       const sampleSize = typeof stats.sampleSize === 'number' ? stats.sampleSize : payload.length;
       const method = typeof stats.method === 'string' ? stats.method : 'Pearson';
 
-      return {
+      return verifyContract({
         kind: 'correlationSummary',
         schemaVersion: 1,
         data: payload,
@@ -193,9 +267,11 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
         trendSlope: slope,
         sampleSize,
         method,
+        xAxis: { key: 'x', label: formatFieldName(plan.metric || 'Variable X'), vizType: 'numeric' },
+        yAxis: { key: 'y', label: formatFieldName(plan.target || 'Variable Y'), vizType: 'numeric' },
         xAxisLabel: plan.metric || 'Variable X',
         yAxisLabel: plan.target || 'Variable Y'
-      } as any;
+      });
     }
 
     case 'distribution': {
@@ -203,26 +279,31 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
         binRange: String(r.binRange || r.bin_label || Object.values(r)[0] || ''),
         count: Number(r.count || Object.values(r)[1] || 0)
       }));
-      return {
+      return verifyContract({
         kind: 'distributionBins',
         schemaVersion: 1,
         data: payload,
         metricName: plan.metric || 'Metric',
+        xAxis: { key: 'binRange', label: formatFieldName(plan.metric || 'Range'), vizType: 'category' },
+        yAxis: { key: 'count', label: 'Count', vizType: 'numeric' },
+        series: [{ key: 'count', label: 'Count' }],
         xAxisLabel: plan.metric || 'Range',
         yAxisLabel: 'Count'
-      };
+      });
     }
 
     case 'filter':
     case 'summary':
     default: {
       const cols = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
-      return {
+      const rowCount = typeof data?.metadata?.rowCount === 'number' ? data.metadata.rowCount : rawRows.length;
+      return verifyContract({
         kind: 'tableRows',
         schemaVersion: 1,
         data: rawRows,
-        columns: cols
-      };
+        columns: cols,
+        rowCount
+      });
     }
   }
 }

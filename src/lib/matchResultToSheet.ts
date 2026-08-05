@@ -7,74 +7,66 @@
 import { WorkspaceBlueprint } from '../domain/analytics/types';
 
 /**
- * Column affinity groups — maps column name fragments to thematic sheet IDs.
- * Scoring: each matching fragment adds +1 to that sheet's score.
- * The sheet with the highest score wins; ties go to the first static sheet.
+ * Extracts all column name tokens from a Q&A result's plan.
  */
-const SHEET_COLUMN_AFFINITY: Record<string, string[]> = {
-  sheet_sleep: [
-    'sleep', 'bedtime', 'wake', 'rest', 'insomnia', 'fatigue'
-  ],
-  sheet_stress: [
-    'stress', 'mental', 'anxiety', 'depression'
-  ],
-  sheet_platform: [
-    'platform', 'usage', 'social', 'media', 'instagram',
-    'tiktok', 'youtube', 'snapchat', 'twitter', 'screen_time'
-  ],
-  sheet_demographics: [
-    'age', 'gender'
-  ],
-  sheet_overview: [
-    'sleep', 'anxiety', 'depression', 'stress', 'gender',
-    'social', 'platform', 'usage', 'daily', 'academic',
-    'performance', 'age', 'media', 'instagram', 'tiktok',
-    'youtube', 'snapchat', 'twitter', 'screen_time'
-  ]
-};
+function extractResultColumns(result: any): string[] {
+  const cols = new Set<string>();
+  const plan = result?.plan;
+  if (!plan) return [];
 
-const INTENT_SHEET_PREFERENCE: Record<string, string> = {
-  correlation:       'sheet_overview',
-  distribution:      'sheet_overview',
-  grouped_average:   'sheet_overview',
-  comparison:        'sheet_overview',
-  ranking:           'sheet_overview',
-  summary:           'sheet_overview',
-  feature_importance:'sheet_overview',
-  filter:            'sheet_overview',
-};
-
-/**
- * Scores how well a sheet matches based on columns referenced in the result.
- */
-function scoreSheet(sheetId: string, columnTokens: string[]): number {
-  const affinityList = SHEET_COLUMN_AFFINITY[sheetId] || [];
-  return columnTokens.reduce((score, token) => {
-    return score + (affinityList.some(kw => token.includes(kw) || kw.includes(token)) ? 1 : 0);
-  }, 0);
+  if (plan.metric) cols.add(plan.metric.toLowerCase());
+  if (plan.target) cols.add(plan.target.toLowerCase());
+  if (Array.isArray(plan.groupBy)) {
+    plan.groupBy.forEach((g: string) => cols.add(g.toLowerCase()));
+  }
+  return Array.from(cols);
 }
 
 /**
- * Extracts all column name tokens from a Q&A result's plan.
- * Used for affinity scoring against sheet column groups.
+ * Scores how well a sheet matches based on columns referenced in the cards.
  */
-function extractColumnTokens(result: any): string[] {
-  const tokens: string[] = [];
-  const plan = result?.plan;
-  if (!plan) return tokens;
+function scoreSheetDynamic(sheet: any, resultCols: string[]): number {
+  if (!sheet.cards || !Array.isArray(sheet.cards)) return 0;
+  
+  const sheetCols = new Set<string>();
+  for (const card of sheet.cards) {
+    const spec = card.spec;
+    if (!spec) continue;
+    
+    if (spec.metricColumn) sheetCols.add(spec.metricColumn.toLowerCase());
+    if (spec.groupColumn) sheetCols.add(spec.groupColumn.toLowerCase());
+    if (spec.categoryColumn) sheetCols.add(spec.categoryColumn.toLowerCase());
+    if (spec.xColumn) sheetCols.add(spec.xColumn.toLowerCase());
+    if (spec.yColumn) sheetCols.add(spec.yColumn.toLowerCase());
+  }
 
-  const addTokens = (val: string | undefined) => {
-    if (val) {
-      val.toLowerCase().split('_').forEach(t => tokens.push(t));
-      tokens.push(val.toLowerCase());
+  let score = 0;
+  for (const col of resultCols) {
+    if (sheetCols.has(col)) {
+      score += 1;
     }
+  }
+  return score;
+}
+
+/**
+ * Fallback matcher based on intent name substrings.
+ */
+function getPreferredSheetForIntent(intent: string, staticSheets: any[]): string {
+  const preferredSubstrings: Record<string, string[]> = {
+    correlation: ['relationship', 'trend', 'overview'],
+    distribution: ['overview', 'demographic', 'breakdown'],
+    grouped_average: ['breakdown', 'overview'],
+    comparison: ['breakdown', 'overview'],
+    ranking: ['breakdown', 'overview']
   };
 
-  addTokens(plan.metric);
-  addTokens(plan.target);
-  (plan.groupBy || []).forEach((g: string) => addTokens(g));
-
-  return tokens;
+  const substrings = preferredSubstrings[intent] || ['overview'];
+  for (const sub of substrings) {
+    const match = staticSheets.find(s => s.id.toLowerCase().includes(sub) || s.name.toLowerCase().includes(sub));
+    if (match) return match.id;
+  }
+  return staticSheets[0]?.id || '';
 }
 
 /**
@@ -97,12 +89,12 @@ export function matchResultToSheet(result: any, workspace: WorkspaceBlueprint): 
   }
 
   const intent: string = result?.plan?.intent || '';
-  const columnTokens = extractColumnTokens(result);
+  const resultCols = extractResultColumns(result);
 
   // Score each static sheet
   const scores: Record<string, number> = {};
   for (const sheet of staticSheets) {
-    scores[sheet.id] = scoreSheet(sheet.id, columnTokens);
+    scores[sheet.id] = scoreSheetDynamic(sheet, resultCols);
   }
 
   // Find winner by highest score
@@ -110,9 +102,7 @@ export function matchResultToSheet(result: any, workspace: WorkspaceBlueprint): 
 
   // If all scores are 0, use intent-based preference as tiebreaker
   if (maxScore === 0) {
-    const preferred = INTENT_SHEET_PREFERENCE[intent];
-    const match = staticSheets.find(s => s.id === preferred);
-    return match ? match.id : staticSheets[0].id;
+    return getPreferredSheetForIntent(intent, staticSheets);
   }
 
   // Return first sheet with the max score

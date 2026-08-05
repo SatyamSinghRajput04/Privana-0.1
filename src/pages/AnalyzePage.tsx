@@ -7,7 +7,7 @@ import {
   ScatterChart, Scatter, ZAxis, ComposedChart, ReferenceLine
 } from 'recharts';
 import type { Page } from '../App';
-import { executeSQL, getSqlTableName, getTableSchema, isTableLoaded, generateLocalQuery, loadCSV, loadJSON } from '../lib/sqlEngine';
+import { executeSQL, getSqlTableName, getTableSchema, isTableLoaded, loadCSV, loadJSON } from '../lib/sqlEngine';
 import { validateDatasetSafety } from '../domain/safeCompute/preflight';
 import { runSafeCompute } from '../domain/safeCompute';
 import { ExcludedFeature } from '../domain/safeCompute/types';
@@ -32,6 +32,7 @@ import { EvalLogger } from '../domain/analytics/evalLogger';
 import { AnalyticsResult } from '../domain/analytics/types';
 import { matchResultToSheet } from '../lib/matchResultToSheet';
 import { mapToVisualContract } from '../domain/analytics/resultToVisualContext';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 // ---------------------------------------------------------------------------
 // Self-contained Markdown renderer â€” no external deps.
@@ -244,331 +245,12 @@ interface P {
 
 const COLORS = ['#eab308', '#3b82f6', '#ef4444', '#a855f7', '#f97316', '#06b6d4'];
 
-// Standalone local-state search bar to completely eliminate typing lag
-interface QuerySearchBarProps {
-  qaLoading: boolean;
-  hasResponse: boolean;
-  hasContextualCard: boolean;
-  onSearch: (query: string) => void;
-  onReset: () => void;
-  qaInput: string;
-  setQaInput: (val: string) => void;
-}
-
-const QuerySearchBar: React.FC<QuerySearchBarProps> = ({
-  qaLoading,
-  hasResponse,
-  hasContextualCard,
-  onSearch,
-  onReset,
-  qaInput,
-  setQaInput
-}) => {
-  const [localVal, setLocalVal] = useState(qaInput);
-
-  useEffect(() => {
-    setLocalVal(qaInput);
-  }, [qaInput]);
-
-  const handleSearchSubmit = () => {
-    const trimmed = localVal.trim();
-    if (trimmed) {
-      setQaInput(trimmed);
-      onSearch(trimmed);
-    }
-  };
-
-  return (
-    <div style={{ display: 'flex', gap: '0.55rem', flex: 1 }}>
-      <div style={{ flex: 1, position: 'relative' }}>
-        <Search size={13} style={{ position: 'absolute', left: 10, top: 9.5, color: '#52525b' }} />
-        <input
-          type="text"
-          placeholder="e.g., average sleep hours for female TikTok users aged 14 to 16..."
-          value={localVal}
-          onChange={(e) => setLocalVal(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSearchSubmit(); }}
-          style={{
-            width: '100%',
-            height: '32px',
-            background: '#080405',
-            border: '1.5px solid var(--rim)',
-            borderRadius: '8px',
-            paddingLeft: '2.1rem',
-            paddingRight: '1rem',
-            fontSize: '0.75rem',
-            color: '#fff',
-            outline: 'none',
-            transition: 'border-color 0.15s'
-          }}
-          onFocus={(e) => e.target.style.borderColor = '#ef4444'}
-          onBlur={(e) => e.target.style.borderColor = 'var(--rim)'}
-        />
-      </div>
-      
-      <button
-        onClick={handleSearchSubmit}
-        disabled={qaLoading || !localVal.trim()}
-        style={{
-          height: '32px',
-          background: '#ef4444',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '8px',
-          padding: '0 1.25rem',
-          fontSize: '0.72rem',
-          fontWeight: 700,
-          cursor: (qaLoading || !localVal.trim()) ? 'default' : 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.35rem',
-          transition: 'all 0.15s'
-        }}
-      >
-        {qaLoading ? 'Thinking...' : 'Ask AI'}
-      </button>
-
-      {(localVal.trim() || hasResponse || hasContextualCard) && (
-        <button
-          onClick={() => {
-            setLocalVal('');
-            setQaInput('');
-            onReset();
-          }}
-          style={{
-            height: '32px',
-            background: 'transparent',
-            color: '#71717a',
-            border: '1.5px solid var(--rim)',
-            borderRadius: '8px',
-            padding: '0 0.85rem',
-            fontSize: '0.72rem',
-            fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.3rem',
-            transition: 'all 0.15s'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#ef4444';
-            e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#71717a';
-            e.currentTarget.style.borderColor = 'var(--rim)';
-          }}
-          title="Clear query and reset view"
-        >
-          Reset
-        </button>
-      )}
-    </div>
-  );
-};
-
-// Premium welcoming dashboard onboarding layout
-interface WelcomeDashboardProps {
-  selectedDataset: any;
-  onSelectPrompt: (prompt: string) => void;
-  onToggleDefaultReports: () => void;
-}
-
-const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({
-  selectedDataset,
-  onSelectPrompt,
-  onToggleDefaultReports
-}) => {
-  const getSuggestions = () => {
-    if (!selectedDataset) return [];
-    const cols = selectedDataset.columns_meta || [];
-    const names = cols.map((c: any) => c.name.toLowerCase());
-    
-    const suggs: string[] = [];
-    if (names.includes('sleep_hours') && names.includes('gender')) {
-      suggs.push("What is the average sleep_hours by gender?");
-    }
-    if (names.includes('stress_level') && names.includes('gender')) {
-      suggs.push("Compare stress_level across gender");
-    }
-    if (names.includes('daily_social_media_hours') && names.includes('anxiety_level')) {
-      suggs.push("Show daily_social_media_hours vs anxiety_level correlation");
-    }
-    if (names.includes('depression_label')) {
-      suggs.push("What is the distribution of depression_label?");
-    }
-    
-    if (suggs.length < 3) {
-      const numCols = cols.filter((c: any) => c.type === 'number').map((c: any) => c.name);
-      const catCols = cols.filter((c: any) => c.type === 'string' || c.type === 'category').map((c: any) => c.name);
-      if (numCols.length > 0 && catCols.length > 0) {
-        suggs.push(`Show average ${numCols[0]} by ${catCols[0]}`);
-      }
-      if (numCols.length >= 2) {
-        suggs.push(`Correlation between ${numCols[0]} and ${numCols[1]}`);
-      }
-    }
-    
-    return suggs.slice(0, 4);
-  };
-
-  const suggestions = getSuggestions();
-
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '1.25rem',
-      flex: 1,
-      minHeight: 0,
-      padding: '2.5rem 1.5rem',
-      background: 'radial-gradient(circle at 50% 30%, rgba(239, 68, 68, 0.045) 0%, rgba(6, 4, 5, 0.5) 100%)',
-      borderRadius: '16px',
-      border: '1.5px solid var(--rim)',
-      backdropFilter: 'blur(12px)',
-      color: '#fff',
-      alignItems: 'center',
-      justifyContent: 'center',
-      textAlign: 'center',
-      margin: '0.5rem 0'
-    }}>
-      <motion.div
-        initial={{ scale: 0.85, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 90 }}
-        style={{
-          width: '68px',
-          height: '68px',
-          borderRadius: '20px',
-          background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.16) 0%, rgba(249, 115, 22, 0.04) 100%)',
-          border: '1.5px solid rgba(239, 68, 68, 0.35)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 8px 24px rgba(239, 68, 68, 0.12)',
-          marginBottom: '0.2rem'
-        }}
-      >
-        <Sparkles size={32} style={{ color: '#ef4444' }} />
-      </motion.div>
-
-      <div style={{ maxWidth: '500px' }}>
-        <h2 style={{ fontSize: '1.45rem', fontWeight: 900, letterSpacing: '-0.02em', marginBottom: '0.4rem', color: '#fff' }}>
-          Ready to Explore Your Dataset
-        </h2>
-        <p style={{ fontSize: '0.78rem', color: '#71717a', lineHeight: 1.5, margin: 0 }}>
-          Ask natural language questions to generate charts, correlation scatters, and AI narrative interpretations. Your analytical queries compile and run strictly inside your local sandbox.
-        </p>
-      </div>
-
-      {selectedDataset && (
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '8px',
-          background: 'rgba(15, 24, 40, 0.3)',
-          border: '1px solid var(--rim)',
-          borderRadius: '99px',
-          padding: '5px 12px',
-          fontSize: '0.68rem',
-          color: '#e4e4e7',
-          fontFamily: 'var(--mono)'
-        }}>
-          <Database size={12} style={{ color: '#ef4444' }} />
-          <span>Active Table: <strong>{selectedDataset.name}</strong></span>
-          <span style={{ color: '#27272a' }}>|</span>
-          <span>{Number(selectedDataset.row_count || 1200).toLocaleString()} rows loaded</span>
-        </div>
-      )}
-
-      {suggestions.length > 0 && (
-        <div style={{ width: '100%', maxWidth: '600px', marginTop: '0.4rem' }}>
-          <div style={{ fontSize: '0.65rem', color: '#52525b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, marginBottom: '0.75rem' }}>
-            💡 Quick Exploration Prompts
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
-            {suggestions.map((s, idx) => (
-              <button
-                key={idx}
-                onClick={() => onSelectPrompt(s)}
-                style={{
-                  background: 'rgba(8, 4, 5, 0.65)',
-                  border: '1.5px solid var(--rim)',
-                  borderRadius: '10px',
-                  padding: '7px 12px',
-                  fontSize: '0.7rem',
-                  color: '#d4d4d8',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.15s'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = '#fff';
-                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.45)';
-                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.02)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = '#d4d4d8';
-                  e.currentTarget.style.borderColor = 'var(--rim)';
-                  e.currentTarget.style.background = 'rgba(8, 4, 5, 0.65)';
-                }}
-              >
-                <span>{s}</span>
-                <ArrowRight size={11} style={{ color: '#ef4444' }} />
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.8rem',
-        width: '100%',
-        maxWidth: '280px',
-        margin: '0.3rem 0'
-      }}>
-        <div style={{ flex: 1, height: '1.5px', background: 'var(--rim)' }} />
-        <span style={{ fontSize: '0.62rem', color: '#52525b', fontFamily: 'var(--mono)', fontWeight: 800 }}>OR</span>
-        <div style={{ flex: 1, height: '1.5px', background: 'var(--rim)' }} />
-      </div>
-
-      <button
-        onClick={onToggleDefaultReports}
-        style={{
-          background: 'rgba(239, 68, 68, 0.08)',
-          color: '#ef4444',
-          border: '1.5px solid rgba(239, 68, 68, 0.35)',
-          borderRadius: '10px',
-          padding: '7px 16px',
-          fontSize: '0.72rem',
-          fontWeight: 700,
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          boxShadow: '0 4px 12px rgba(239, 68, 68, 0.05)',
-          transition: 'all 0.15s'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
-          e.currentTarget.style.color = '#fff';
-          e.currentTarget.style.borderColor = 'transparent';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
-          e.currentTarget.style.color = '#ef4444';
-          e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.35)';
-        }}
-      >
-        <span>📊 Load Prebuilt Workspace Reports</span>
-      </button>
-    </div>
-  );
-};
+// Extracted component imports
+import QueryPanel from '../components/analytics/QueryPanel';
+import QueryResultCanvas from '../components/analytics/QueryResultCanvas';
+import WorkspaceTabs from '../components/analytics/WorkspaceTabs';
+import DatasetProfilePanel from '../components/analytics/DatasetProfilePanel';
+import CockpitFilters from '../components/analytics/CockpitFilters';;
 
 export default function AnalyzePage({ setPage, onMenu }: P) {
   const { ws, datasets, selectedDataset, setSelectedDataset, saveBookmark, saveQuery } = useVaultStore();
@@ -717,6 +399,47 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   const [tableLoadedState, setTableLoadedState] = useState<string | null>(null);
   const [loadingTable, setLoadingTable] = useState<string | null>(null);
 
+  /**
+   * Guarantees that selectedDataset is loaded into AlaSQL in-memory table before query execution.
+   * Fetches raw CSV/JSON from IndexedDB cache or sample seeder if not yet loaded into memory.
+   */
+  const ensureTableLoaded = async (ds: any): Promise<boolean> => {
+    if (!ds || !ds.name) return false;
+    const tableName = ds.name;
+    if (isTableLoaded(tableName)) return true;
+
+    try {
+      setLoadingTable(tableName);
+      let text = await localDB.getDatasetCSV(tableName);
+      if (!text) {
+        // Fallback dual-key lookup using sanitized SQL table name
+        text = await localDB.getDatasetCSV(getSqlTableName(tableName));
+      }
+
+      // Auto-generate sample CSV if dataset is a built-in sample and missing from IndexedDB
+      if (!text && tableName.toLowerCase().includes('teen')) {
+        const { generateTeenMentalHealthDatasetCSV } = await import('../lib/datasetSeeder');
+        text = generateTeenMentalHealthDatasetCSV();
+        await localDB.saveDatasetCSV(tableName, text);
+      }
+
+      if (text) {
+        if (tableName.toLowerCase().endsWith('.json')) {
+          loadJSON(tableName, text);
+        } else {
+          await loadCSV(tableName, text);
+        }
+        setTableLoadedState(tableName);
+        return isTableLoaded(tableName);
+      }
+    } catch (err) {
+      console.error('Error auto-loading dataset into database engine:', err);
+    } finally {
+      setLoadingTable(null);
+    }
+    return isTableLoaded(tableName);
+  };
+
   // Local calculation states
   const [kpis, setKpis] = useState({ sleep: 0, age: 0, stress: 0, records: 0 });
   const [genderSleepData, setGenderSleepData] = useState<any[]>([]);
@@ -773,16 +496,21 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     if (!selectedDataset || !columnsList.length) return [];
 
     if (workspacePipelineEnabled) {
-      const tableName = selectedDataset.name;
-      const tbl = getSqlTableName(tableName);
-      const rows = executeSQL(`SELECT * FROM ${tbl}`);
-      const profile = DatasetValidator.profile(rows, tableName);
-      const questions = SchemaIntelligence.suggestQuestions(profile);
-      return questions.map((q: string, idx: number) => ({
-        title: `💡 Suggested Query ${idx + 1}`,
-        desc: q,
-        query: q
-      }));
+      try {
+        const tableName = selectedDataset.name;
+        const tbl = getSqlTableName(tableName);
+        if (!isTableLoaded(tableName)) return [];
+        const rows = executeSQL(`SELECT * FROM ${tbl}`);
+        const profile = DatasetValidator.profile(rows, tableName);
+        const questions = SchemaIntelligence.suggestQuestions(profile);
+        return questions.map((q: string, idx: number) => ({
+          title: `💡 Suggested Query ${idx + 1}`,
+          desc: q,
+          query: q
+        }));
+      } catch {
+        return [];
+      }
     }
     
     const names = columnsList.map(c => c.name.toLowerCase());
@@ -1235,889 +963,6 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     return p.toFixed(4);
   };
 
-  const runLocalStatisticalAnalysis = (question: string, tableName: string): string | null => {
-    const q = question.toLowerCase();
-    
-    // Check if it is either a standard statistical query OR a feature importance query
-    const isFeatureImportanceQuery = 
-      q.includes('strongest relationship') ||
-      q.includes('relationship with') ||
-      q.includes('most related') ||
-      q.includes('feature importance') ||
-      q.includes('which feature');
-
-    const isStatQuery = 
-      isFeatureImportanceQuery ||
-      q.includes('correlation matrix') ||
-      q.includes('spearman') ||
-      q.includes('significant') || q.includes('significance') || q.includes('95% confidence') ||
-      q.includes('regression') || q.includes('predict') || q.includes('linear model') ||
-      q.includes('assumption') || q.includes('homoscedasticity') || q.includes('linearity') ||
-      q.includes('scatter plot') || q.includes('confidence interval') ||
-      q.includes('histogram') ||
-      q.includes('residual') ||
-      q.includes('anomal') || q.includes('outlier') ||
-      q.includes('skewness') || q.includes('kurtosis') ||
-      q.includes('group values into bins') || q.includes('average count for each bin') || q.includes('bins') ||
-      q.includes('top 5') ||
-      q.includes('percentage contribution') || q.includes('value range');
-
-    if (!isStatQuery) return null;
-
-    try {
-      const tbl = getSqlTableName(tableName);
-      const rows = executeSQL(`SELECT * FROM ${tbl}`);
-
-      // ── Hoisted Universal Pre-Flight Guard blocker ──
-      const preflightBlock = validateDatasetSafety(rows, tableName);
-      if (preflightBlock) {
-        return (
-          `🚨 **Dataset Safety Guard Intercepted**\n\n` +
-          `**Reason:** ${preflightBlock.reason}\n\n` +
-          `**Guided Next Steps:**\n` +
-          preflightBlock.nextSteps.map((step, sIdx) => `${sIdx + 1}. ${step}`).join('\n')
-        );
-      }
-
-      // ── Intercept Feature Importance Q&A ──
-      if (isFeatureImportanceQuery) {
-        const result = runSafeCompute({ question, tableName, rows });
-        if (result.status === 'blocked') {
-          return (
-            `🚨 **Dataset Safety Guard Intercepted**\n\n` +
-            `**Reason:** ${result.reason}\n\n` +
-            `**Guided Next Steps:**\n` +
-            result.nextSteps.map((step, sIdx) => `${sIdx + 1}. ${step}`).join('\n')
-          );
-        }
-        if (result.status === 'computed') {
-          return result.answer;
-        }
-        if (result.status === 'unsupported') {
-          return (
-            `⚠️ **Statistical Path Unsupported**\n\n` +
-            `${result.reason}\n\n` +
-            `**Suggested safe questions you can ask:**\n` +
-            result.suggestedQuestions.map(sq => `* "${sq}"`).join('\n')
-          );
-        }
-      }
-
-      // â”€â”€ Pre-flight guard 1: metadata-file detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // A metadata JSON loaded as a 1-row table with @context/license etc.
-      // must be rejected before we waste compute (or show garbage results).
-      const allColsRaw = rows && rows.length > 0 ? Object.keys(rows[0]) : [];
-      const META_SIGNALS = ['@context', 'license', 'creator', 'publisher',
-                            'dateModified', '@type', 'isBasedOn', 'variableMeasured'];
-      const foundMeta = META_SIGNALS.filter(k => allColsRaw.includes(k));
-      if (foundMeta.length >= 2) {
-        return (
-          `ðŸš¨ **Metadata File â€” Cannot Analyze**\n\n` +
-          `The loaded dataset \`${tableName}\` is a **descriptor/metadata file**, not real data.\n` +
-          `It contains fields like \`${foundMeta.slice(0, 3).join('\`, \`')}\` â€” these describe the ` +
-          `dataset schema, not actual respondent records.\n\n` +
-          `**What to do:**\n` +
-          `1. Go to **Datasets** in the left sidebar\n` +
-          `2. Delete \`${tableName}\`\n` +
-          `3. Upload the **real CSV data file** (one row per respondent with columns like ` +
-          `\`sleep_hours\`, \`stress_level\`, \`gender\`, etc.)\n\n` +
-          `*The real Kaggle teen mental health dataset is a CSV file, not a JSON metadata file.*`
-        );
-      }
-
-      // â”€â”€ Pre-flight guard 2: minimum row count â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      if (!rows || rows.length < 2) {
-        const count = rows?.length ?? 0;
-        return (
-          `âš ï¸ **Not Enough Data** (${count} row${count === 1 ? '' : 's'} loaded)\n\n` +
-          `Statistical analysis requires **at least 2 data rows**.\n\n` +
-          `Your current table has only ${count} row${count === 1 ? '' : 's'}, which means ` +
-          `every correlation will be 0, every p-value will be 1, and every chart will be empty.\n\n` +
-          `Please upload the actual data file (a CSV with real records).`
-        );
-      }
-
-      // â”€â”€ Pre-flight guard 3: column existence check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // If the question explicitly names snake_case columns (e.g., sleep_hours)
-      // that do not exist in the loaded table, tell the user instead of silently
-      // falling back to wrong columns (like 'version' vs 'isAccessibleForFree').
-      const allCols = allColsRaw;
-      const questionSnakeCols = (question.match(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/gi) || [])
-        .map(c => c.toLowerCase());
-      if (questionSnakeCols.length > 0) {
-        const missingCols = questionSnakeCols.filter(qc =>
-          !allCols.some(dc => dc.toLowerCase() === qc)
-        );
-        // Only error if ALL mentioned columns are missing (avoid false-positives
-        // when the question has some columns from the table and some generic words)
-        if (missingCols.length > 0 && missingCols.length === questionSnakeCols.length) {
-          return (
-            `âš ï¸ **Column Not Found**\n\n` +
-            `The column${missingCols.length > 1 ? 's' : ''} ` +
-            `${missingCols.map(c => `\`${c}\``).join(', ')} ` +
-            `mentioned in your question ${missingCols.length > 1 ? 'were' : 'was'} not found ` +
-            `in \`${tableName}\`.\n\n` +
-            `**Available columns (${allCols.length} total):** ` +
-            `${allCols.slice(0, 10).join(', ')}${allCols.length > 10 ? ` â€¦+${allCols.length - 10} more` : ''}\n\n` +
-            `Please upload a dataset that contains these columns, ` +
-            `or rephrase your question to match the available fields.`
-          );
-        }
-      }
-
-      const numericCols = allCols.filter(c => {
-        const sample = rows.find(r => r[c] !== null && r[c] !== undefined && r[c] !== '');
-        return sample ? !isNaN(Number(sample[c])) : false;
-      });
-
-
-      // ----- SMART COLUMN DETECTION: parse explicit column names from question first -----
-      let valCol = '';
-      let cntCol = '';
-
-      // Match any actual column name mentioned in the question (exact word-boundary match)
-      const mentionedCols = numericCols.filter(c => {
-        const regex = new RegExp(`\\b${c.replace(/_/g, '[_ ]')}\\b`, 'i');
-        return regex.test(question);
-      });
-
-      // If 2+ columns mentioned explicitly, use the order they appear in the question
-      if (mentionedCols.length >= 2) {
-        // Find order of appearance in the question
-        const positions = mentionedCols.map(c => ({
-          col: c,
-          pos: question.toLowerCase().indexOf(c.toLowerCase())
-        })).sort((a, b) => a.pos - b.pos);
-        valCol = positions[0].col;
-        cntCol = positions[1].col;
-      } else if (mentionedCols.length === 1) {
-        valCol = mentionedCols[0];
-        // Pick the next available numeric col as cntCol
-        const remaining = numericCols.filter(c => c !== valCol);
-        if (allCols.includes('count')) cntCol = 'count';
-        else if (allCols.includes('stress_level')) cntCol = 'stress_level';
-        else cntCol = remaining[0] || '';
-      } else {
-        // Fallback: priority-based mapping when no column name appears in question
-        if (allCols.includes('value')) valCol = 'value';
-        else if (allCols.includes('screen_time_before_sleep')) valCol = 'screen_time_before_sleep';
-        else if (allCols.includes('sleep_hours')) valCol = 'sleep_hours';
-        else valCol = numericCols[0] || '';
-
-        if (allCols.includes('count')) cntCol = 'count';
-        else if (allCols.includes('stress_level')) cntCol = 'stress_level';
-        else if (allCols.includes('anxiety_level')) cntCol = 'anxiety_level';
-        else {
-          const remaining = numericCols.filter(c => c !== valCol);
-          cntCol = remaining[0] || '';
-        }
-      }
-
-      const mappingNote = `*(Using columns: **\`${valCol}\`** (x-axis) and **\`${cntCol}\`** (y-axis), n = ${rows.length} records)*\n\n`;
-
-      // Extract paired numeric rows â€” keep alignment by extracting together
-      const pairs = rows
-        .map(r => ({ x: Number(r[valCol]), y: Number(r[cntCol]) }))
-        .filter(p => !isNaN(p.x) && !isNaN(p.y));
-      const xs = pairs.map(p => p.x);
-      const ys = pairs.map(p => p.y);
-      const n = pairs.length;
-
-      if (n === 0) {
-        return `âš ï¸ Error: Could not extract aligned numeric data for columns \`${valCol}\` and \`${cntCol}\`.\n\nAvailable numeric columns: ${numericCols.join(', ')}`;
-      }
-
-      const getMean = (arr: number[]) => arr.reduce((s, v) => s + v, 0) / arr.length;
-      const getStdDev = (arr: number[]) => {
-        const m = getMean(arr);
-        return Math.sqrt(arr.reduce((s, v) => s + Math.pow(v - m, 2), 0) / (arr.length - 1));
-      };
-
-      // 1. Correlation Matrix
-      if (q.includes('correlation matrix')) {
-        // Use numericCols (data-sampled) not typeof â€” handles CSV string-encoded numbers
-        if (numericCols.length < 2) {
-          return `âš ï¸ Correlation matrix requires at least 2 numeric columns. Found: ${numericCols.join(', ')}`;
-        }
-        // For each pair, filter NaN independently to get aligned pairs
-        let matrixMd = `### ðŸ“Š Pairwise Pearson Correlation Matrix\n`;
-        matrixMd += `*(n = up to ${rows.length} records per pair, values computed from actual data)*\n\n`;
-        matrixMd += `| Variable | ` + numericCols.map(c => `\`${c}\``).join(' | ') + ` |\n`;
-        matrixMd += `| --- | ` + numericCols.map(() => '---').join(' | ') + ` |\n`;
-        for (const colA of numericCols) {
-          matrixMd += `| **\`${colA}\`** | `;
-          matrixMd += numericCols.map(colB => {
-            const pairsAB = rows
-              .map(r => ({ a: Number(r[colA]), b: Number(r[colB]) }))
-              .filter(p => !isNaN(p.a) && !isNaN(p.b));
-            if (pairsAB.length < 3) return 'N/A';
-            const rVal = getPearsonCorrelation(pairsAB.map(p => p.a), pairsAB.map(p => p.b));
-            const cell = colA === colB ? '**1.0000**'
-              : `${rVal >= 0 ? '+' : ''}${rVal.toFixed(4)}`;
-            return cell;
-          }).join(' | ') + ` |\n`;
-        }
-        matrixMd += `\n*r ranges \u221221 (perfect negative) to +1 (perfect positive). Diagonal = 1 by definition.*`;
-        return matrixMd;
-      }
-
-      // 2. Spearman Correlation
-      if (q.includes('spearman')) {
-        const rs = getSpearmanCorrelation(xs, ys);
-        const rp = getPearsonCorrelation(xs, ys);
-        const sigS = testCorrelationSignificance(rs, n);
-        const sigP = testCorrelationSignificance(rp, n);
-        // Effect size label (Cohen, 1988: small=0.1, medium=0.3, large=0.5)
-        const effectLabel = Math.abs(rs) >= 0.5 ? 'large' : Math.abs(rs) >= 0.3 ? 'medium' : Math.abs(rs) >= 0.1 ? 'small' : 'negligible';
-        
-        return `### ðŸ“ Spearman Rank Correlation: \`${valCol}\` vs \`${cntCol}\`\n` +
-          mappingNote +
-          `| Metric | Value |\n` +
-          `| --- | --- |\n` +
-          `| **Spearman Ï (rho)** | \`${rs.toFixed(6)}\` |\n` +
-          `| **Pearson r** (for comparison) | \`${rp.toFixed(6)}\` |\n` +
-          `| **n (aligned pairs)** | \`${n}\` |\n` +
-          `| **Degrees of freedom** | \`${n - 2}\` |\n` +
-          `| **t-statistic** | \`${sigS.t.toFixed(6)}\` |\n` +
-          `| **p-value (two-tailed, exact t-dist)** | ${fmtP(sigS.p)} |\n` +
-          `| **Significant at Î±=0.05?** | ${sigS.significant ? 'âœ… YES â€” reject Hâ‚€' : 'âŒ NO â€” fail to reject Hâ‚€'} |\n` +
-          `| **Effect Size** | ${effectLabel} (\`|\u03c1| = ${Math.abs(rs).toFixed(4)}\`) |\n` +
-          `| **Relationship** | ${interpretCorrelation(rs)} |\n\n` +
-          `**Hâ‚€:** There is no monotonic association between \`${valCol}\` and \`${cntCol}\` (Ï = 0).\n` +
-          `**Hâ‚:** There is a monotonic association (Ï â‰  0).\n\n` +
-          `**Conclusion:** ${sigS.significant
-            ? `With p = ${fmtP(sigS.p)} < 0.05 and Ï = ${rs.toFixed(4)}, we **reject Hâ‚€**. There is a statistically significant ${interpretCorrelation(rs)} monotonic relationship between \`${valCol}\` and \`${cntCol}\`.`
-            : `With p = ${fmtP(sigS.p)} â‰¥ 0.05, we **fail to reject Hâ‚€**. There is insufficient evidence of a monotonic relationship.`}\n\n` +
-          `*Method: Spearman Ï computed via Pearson correlation of mid-ranks (handles ties). p-value via t-distribution with df = ${n - 2} (exact, not Normal approximation).*`;
-      }
-
-      // 3. Test Pearson correlation significance
-      if (q.includes('significant') || q.includes('significance') || q.includes('95% confidence')) {
-        const rp = getPearsonCorrelation(xs, ys);
-        const sig = testCorrelationSignificance(rp, n);
-        const ciTCrit = tCritical95(n - 2);
-        // Fisher z-transform CI for r
-        const zr = 0.5 * Math.log((1 + rp) / (1 - rp));
-        const zSE = 1 / Math.sqrt(n - 3);
-        const ciLow = Math.tanh(zr - 1.96 * zSE);
-        const ciHigh = Math.tanh(zr + 1.96 * zSE);
-        
-        return `### ðŸ”¬ Pearson Correlation Significance Test (95% Confidence)\n` +
-          mappingNote +
-          `| Metric | Value |\n` +
-          `| --- | --- |\n` +
-          `| **Pearson r** | \`${rp.toFixed(6)}\` |\n` +
-          `| **Relationship** | ${interpretCorrelation(rp)} |\n` +
-          `| **n** | \`${n}\` |\n` +
-          `| **df** | \`${n - 2}\` |\n` +
-          `| **t-statistic** | \`${sig.t.toFixed(6)}\` |\n` +
-          `| **p-value (two-tailed, exact t-dist)** | ${fmtP(sig.p)} |\n` +
-          `| **95% CI for r (Fisher z)** | \`[${ciLow.toFixed(4)}, ${ciHigh.toFixed(4)}]\` |\n` +
-          `| **Decision (Î± = 0.05)** | ${sig.significant ? 'âœ… Reject Hâ‚€' : 'âŒ Fail to reject Hâ‚€'} |\n\n` +
-          `**Hâ‚€:** Ï = 0 (no linear association)\n` +
-          `**Hâ‚:** Ï â‰  0 (linear association exists)\n\n` +
-          `**Conclusion:** ${sig.significant
-            ? `p = ${fmtP(sig.p)} < 0.05. We **reject Hâ‚€**. There is a statistically significant ${interpretCorrelation(rp)} linear relationship between \`${valCol}\` and \`${cntCol}\` (r = ${rp.toFixed(4)}, 95% CI [${ciLow.toFixed(4)}, ${ciHigh.toFixed(4)}]).`
-            : `p = ${fmtP(sig.p)} â‰¥ 0.05. We **fail to reject Hâ‚€**. There is insufficient evidence of a linear relationship.`}`;
-      }
-
-      // 4. Predict y at a specific x value (parsed dynamically from the question)
-      if (q.includes('predict')) {
-        // Extract the numeric x-value from the question: "predict ... when value = 22" or "predict ... = 7.5"
-        const numMatch = question.match(/(?:when\s+\w+\s*=\s*|=\s*)([\d.]+)|predict\s+(?:\w+\s+){0,3}([\d.]+)/i)
-                      || question.match(/([\d]+(?:\.\d+)?)/g);
-        const xInput = numMatch
-          ? parseFloat(Array.isArray(numMatch) ? (numMatch[1] || numMatch[2] || numMatch[0]) : numMatch[0])
-          : NaN;
-
-        if (isNaN(xInput)) {
-          return `âš ï¸ Could not detect a numeric value to predict at. Please rephrase as: *"Predict ${cntCol} when ${valCol} = [number]"*`;
-        }
-
-        const reg = getLinearRegression(xs, ys);
-        const predictedVal = reg.slope * xInput + reg.intercept;
-        const minX = Math.min(...xs), maxX = Math.max(...xs);
-        const meanX = xs.reduce((s, v) => s + v, 0) / n;
-        const isExtrapolation = xInput < minX || xInput > maxX;
-        // 95% prediction interval at xInput
-        const Sxx = reg.Sxx ?? xs.reduce((s, v) => s + Math.pow(v - meanX, 2), 0);
-        const piSE = reg.seReg * Math.sqrt(1 + 1/n + Math.pow(xInput - meanX, 2) / Sxx);
-        const tCrit = tCritical95(n - 2);
-        const piLow = predictedVal - tCrit * piSE;
-        const piHigh = predictedVal + tCrit * piSE;
-
-        let md = `### ðŸ”® OLS Regression Prediction: ${valCol} = ${xInput}\n` + mappingNote;
-        md += `| Metric | Value |\n| --- | --- |\n`;
-        md += `| **Model** | \`${cntCol} = ${reg.slope.toFixed(6)} × ${valCol} + ${reg.intercept.toFixed(6)}\` |\n`;
-        md += `| **Input x (${valCol})** | \`${xInput}\` |\n`;
-        md += `| **Point Prediction (\u0177)** | **\`${predictedVal.toFixed(6)}\`** |\n`;
-        md += `| **95% Prediction Interval** | \`[${piLow.toFixed(4)}, ${piHigh.toFixed(4)}]\` |\n`;
-        md += `| **Observed range of ${valCol}** | \`[${minX.toFixed(4)}, ${maxX.toFixed(4)}]\` |\n`;
-        md += `| **Extrapolation?** | ${isExtrapolation ? 'âš ï¸ YES â€” outside observed range' : 'âœ… No â€” within observed range'} |\n\n`;
-        if (isExtrapolation) {
-          md += `> **âš ï¸ Extrapolation Warning:** x = ${xInput} is ${xInput < minX ? 'below the minimum' : 'above the maximum'} observed value (${xInput < minX ? minX.toFixed(2) : maxX.toFixed(2)}). The linear relationship may not hold outside the data range. Treat this prediction with caution.`;
-        } else {
-          md += `> **âœ… Interpolation:** x = ${xInput} is within the observed data range. The prediction is reliable assuming the linear model holds.`;
-        }
-        return md;
-      }
-
-      // 5. Build OLS regression model
-      if (q.includes('regression') || q.includes('linear model') || q.includes('fit a line')) {
-        const reg = getLinearRegression(xs, ys);
-        const residuals = pairs.map(p => p.y - (reg.slope * p.x + reg.intercept));
-        const resMean = getMean(residuals);
-        const resSD = getStdDev(residuals);
-        const rp = getPearsonCorrelation(xs, ys);
-        const fStatNum = reg.r2 / 1;  // k=1 predictor
-        const fStatDen = (1 - reg.r2) / (n - 2);
-        const fStat = fStatDen === 0 ? 0 : fStatNum / fStatDen;
-        const pModel = tDistPValue(Math.sqrt(fStat), n - 2); // F(1,df) equiv to t²
-        
-        return `### ðŸ“ˆ OLS Linear Regression Model\n` +
-          mappingNote +
-          `#### Model Summary\n` +
-          `| Metric | Value |\n` +
-          `| --- | --- |\n` +
-          `| **Equation** | \`${cntCol} = ${reg.slope.toFixed(6)} × ${valCol} + ${reg.intercept.toFixed(6)}\` |\n` +
-          `| **Pearson r** | \`${rp.toFixed(6)}\` (${interpretCorrelation(rp)}) |\n` +
-          `| **R²** | \`${reg.r2.toFixed(6)}\` â€” ${(reg.r2 * 100).toFixed(2)}% of variance explained |\n` +
-          `| **Residual Std Error (RSE)** | \`${reg.seReg.toFixed(6)}\` on ${n - 2} df |\n` +
-          `| **F-statistic** | \`${fStat.toFixed(4)}\` on 1 and ${n - 2} df, p = ${fmtP(pModel)} |\n` +
-          `| **Sample Size (n)** | \`${n}\` |\n\n` +
-          `#### Coefficient Table (computed from this dataset)\n` +
-          `| Parameter | Estimate | Std. Error | t-value | p-value | Significant? |\n` +
-          `| --- | --- | --- | --- | --- | --- |\n` +
-          `| **Slope** (${valCol}) | \`${reg.slope.toFixed(6)}\` | \`${reg.seSlope.toFixed(6)}\` | \`${reg.tSlope.toFixed(4)}\` | ${fmtP(reg.pSlope)} | ${reg.pSlope < 0.05 ? 'âœ… Yes' : 'âŒ No'} |\n` +
-          `| **Intercept** | \`${reg.intercept.toFixed(6)}\` | \`${reg.seIntercept.toFixed(6)}\` | \`${reg.tIntercept.toFixed(4)}\` | ${fmtP(reg.pIntercept)} | ${reg.pIntercept < 0.05 ? 'âœ… Yes' : 'âŒ No'} |\n\n` +
-          `#### Residual Statistics\n` +
-          `| Statistic | Value |\n` +
-          `| --- | --- |\n` +
-          `| **Mean** (should be ~0) | \`${resMean.toExponential(4)}\` |\n` +
-          `| **Std Dev** | \`${resSD.toFixed(6)}\` |\n` +
-          `| **Min** | \`${Math.min(...residuals).toFixed(4)}\` |\n` +
-          `| **Max** | \`${Math.max(...residuals).toFixed(4)}\` |\n\n` +
-          `*Interpretation:* For every 1-unit increase in \`${valCol}\`, the predicted \`${cntCol}\` changes by **${reg.slope.toFixed(4)}** units. All values computed from the ${n}-record dataset â€” no approximations used.`;
-      }
-
-      // 6. Check regression assumptions
-      if (q.includes('assumption') || q.includes('homoscedasticity') || q.includes('linearity')) {
-        const reg = getLinearRegression(xs, ys);
-        const residuals = pairs.map(p => p.y - (reg.slope * p.x + reg.intercept));
-        const linR = getPearsonCorrelation(xs, residuals);
-        const linSig = testCorrelationSignificance(linR, n);
-        const absRes = residuals.map(r => Math.abs(r));
-        const homR = getPearsonCorrelation(xs, absRes);
-        const homSig = testCorrelationSignificance(homR, n);
-        const sk = getSkewnessAndKurtosis(residuals);
-        
-        // Data-driven verdict thresholds (Bulmer, 1979; Hair et al., 2010)
-        const linearityPass = Math.abs(linR) < 0.1 || linSig.p > 0.05;
-        const homPass = Math.abs(homR) < 0.15 || homSig.p > 0.05;
-        // |Skewness| â‰¤ 1.0 and |Kurtosis| â‰¤ 3.5 â†’ acceptable normality
-        const normalityPass = Math.abs(sk.skewness) <= 1.0 && Math.abs(sk.kurtosis) <= 3.5;
-        const skewSevere = Math.abs(sk.skewness) > 2.0;
-        const kurtSevere = Math.abs(sk.kurtosis) > 7.0;
-
-        let report = `### ðŸ”¬ OLS Regression Assumptions Check\n` + mappingNote;
-        report += `#### 1. Linearity (Residuals vs Fitted)\n`;
-        report += `â€¢ Cor(x, residuals) = \`${linR.toFixed(6)}\`, p = ${fmtP(linSig.p)}\n`;
-        report += `â€¢ **${linearityPass ? 'âœ… PASSED' : 'âš ï¸ WARNING'}** â€” ${linearityPass ? 'No systematic linear pattern in residuals.' : 'Non-zero correlation detected; relationship may be non-linear.'}\n\n`;
-        report += `#### 2. Homoscedasticity (Breusch-Pagan proxy)\n`;
-        report += `â€¢ Cor(x, |residuals|) = \`${homR.toFixed(6)}\`, p = ${fmtP(homSig.p)}\n`;
-        report += `â€¢ **${homPass ? 'âœ… PASSED' : 'âš ï¸ WARNING'}** â€” ${homPass ? 'Residual variance appears uniform across x.' : 'Heteroscedasticity likely â€” variance changes with x.'}\n\n`;
-        report += `#### 3. Normality of Residuals\n`;
-        report += `â€¢ Skewness = \`${sk.skewness.toFixed(6)}\` ${Math.abs(sk.skewness) > 1.0 ? 'âš ï¸ > |1.0| threshold' : 'âœ… within |1.0|'}\n`;
-        report += `â€¢ Excess Kurtosis = \`${sk.kurtosis.toFixed(6)}\` ${Math.abs(sk.kurtosis) > 3.5 ? 'âš ï¸ > |3.5| threshold' : 'âœ… within |3.5|'}\n`;
-        report += `â€¢ **${normalityPass ? 'âœ… PASSED' : skewSevere || kurtSevere ? 'âŒ FAILED' : 'âš ï¸ MARGINAL'}** â€” `;
-        if (normalityPass) report += 'Residuals are approximately normally distributed.';
-        else if (skewSevere) report += `Severe skewness (${sk.skewness.toFixed(2)}) indicates non-normal residuals; consider transformations.`;
-        else if (kurtSevere) report += `Heavy tails (kurtosis ${sk.kurtosis.toFixed(2)}) suggest outlier contamination.`;
-        else report += 'Slight departure from normality; results are likely still valid for large samples (n=${n}).';
-        report += `\n\n`;
-        report += `#### 4. Independence\n`;
-        report += `â€¢ Cannot be verified without temporal or spatial ordering information.\n`;
-        report += `â€¢ **â„¹ï¸ Assumed** â€” rows treated as independent observations.\n\n`;
-        report += `*All diagnostics computed from ${n} residual values using the fitted model: ${cntCol} = ${reg.slope.toFixed(4)} × ${valCol} + ${reg.intercept.toFixed(4)}*`;
-        return report;
-      }
-
-      // 7. Scatter plot with confidence intervals
-      if (q.includes('scatter plot') || q.includes('confidence interval')) {
-        const reg = getLinearRegression(xs, ys);
-        const rp = getPearsonCorrelation(xs, ys);
-        const sig = testCorrelationSignificance(rp, n);
-        // Correct SE(slope) = RSE / sqrt(SS_xx)
-        const ciTCrit = tCritical95(n - 2);
-        const ciMin = reg.slope - ciTCrit * reg.seSlope;
-        const ciMax = reg.slope + ciTCrit * reg.seSlope;
-        // Prediction interval half-width at mean of x
-        const piHW = reg.seReg * Math.sqrt(1 + 1 / n);
-        const piMin = (reg.slope * (xs.reduce((s,v)=>s+v,0)/n) + reg.intercept) - ciTCrit * piHW;
-        const piMax = (reg.slope * (xs.reduce((s,v)=>s+v,0)/n) + reg.intercept) + ciTCrit * piHW;
-
-        return `### ðŸ“Š Scatter Plot â€” \`${valCol}\` vs \`${cntCol}\` with 95% Bands\n` +
-          mappingNote +
-          `#### Computed Statistics\n` +
-          `| Metric | Value |\n` +
-          `| --- | --- |\n` +
-          `| **Regression Equation** | \`${cntCol} = ${reg.slope.toFixed(6)} × ${valCol} + ${reg.intercept.toFixed(6)}\` |\n` +
-          `| **Pearson r** | \`${rp.toFixed(6)}\` â€” ${interpretCorrelation(rp)} correlation |\n` +
-          `| **p-value (Hâ‚€: r=0)** | ${fmtP(sig.p)} ${sig.significant ? 'â†’ significant' : 'â†’ not significant'} |\n` +
-          `| **R²** | \`${reg.r2.toFixed(6)}\` |\n` +
-          `| **t-critical (95%, df=${n-2})** | \`${ciTCrit.toFixed(4)}\` |\n` +
-          `| **95% CI for slope Î²â‚** | \`[${ciMin.toFixed(6)}, ${ciMax.toFixed(6)}]\` |\n` +
-          `| **95% PI at xÌ„ (prediction band)** | \`[${piMin.toFixed(4)}, ${piMax.toFixed(4)}]\` |\n\n` +
-          `#### Interpretation\n` +
-          `The scatter relationship between \`${valCol}\` and \`${cntCol}\` is a **${interpretCorrelation(rp)}** one (r = ${rp.toFixed(4)}).\n` +
-          `${sig.significant ? `The correlation is statistically significant (p = ${fmtP(sig.p)} < 0.05).` : `The correlation is NOT statistically significant (p = ${fmtP(sig.p)} â‰¥ 0.05).`}\n` +
-          `The slope confidence interval **[${ciMin.toFixed(4)}, ${ciMax.toFixed(4)}]** ${ciMin > 0 ? 'does not include 0, confirming a positive slope.' : ciMax < 0 ? 'does not include 0, confirming a negative slope.' : 'includes 0 â€” slope may be zero (no real trend).'}`;
-      }
-
-      // 8. Histogram
-      if (q.includes('histogram')) {
-        const freqs: Record<number, number> = {};
-        ys.forEach(y => { freqs[y] = (freqs[y] || 0) + 1; });
-        
-        const sortedFreqs = Object.entries(freqs).map(([k, v]) => ({
-          value: parseInt(k),
-          frequency: v,
-          pct: parseFloat(((v / n) * 100).toFixed(2))
-        })).sort((a, b) => a.value - b.value);
-        
-        let histMd = `### ðŸ“Š Frequency Distribution (Histogram) of \`${cntCol}\`\n`;
-        histMd += `| Value | Frequency | Percentage | Visual Representation |\n`;
-        histMd += `| --- | --- | --- | --- |\n`;
-        
-        sortedFreqs.forEach(f => {
-          const barLen = Math.round(f.pct / 2);
-          const barVisual = 'â–ˆ'.repeat(barLen) + 'â–‘'.repeat(Math.max(0, 15 - barLen));
-          histMd += `| **${f.value}** | ${f.frequency} | ${f.pct.toFixed(1)}% | \`${barVisual}\` |\n`;
-        });
-        
-        const sk = getSkewnessAndKurtosis(ys);
-        const sortedYs = [...ys].sort((a, b) => a - b); // non-mutating copy
-        const medianY = n % 2 === 0
-          ? (sortedYs[n/2 - 1] + sortedYs[n/2]) / 2
-          : sortedYs[Math.floor(n/2)];
-        histMd += `\n**Distribution Metrics (computed from ${n} values):**\n`;
-        histMd += `| Metric | Value |\n| --- | --- |\n`;
-        histMd += `| **Mean** | \`${getMean(ys).toFixed(6)}\` |\n`;
-        histMd += `| **Median** | \`${medianY.toFixed(4)}\` |\n`;
-        histMd += `| **Std Dev** | \`${getStdDev(ys).toFixed(6)}\` |\n`;
-        histMd += `| **Skewness (G1)** | \`${sk.skewness.toFixed(6)}\` |\n`;
-        histMd += `| **Excess Kurtosis (G2)** | \`${sk.kurtosis.toFixed(6)}\` |\n`;
-        histMd += `| **Min / Max** | \`${Math.min(...ys).toFixed(2)}\` / \`${Math.max(...ys).toFixed(2)}\` |\n`;
-        return histMd;
-      }
-
-      // 9. Residual errors
-      if (q.includes('residual errors') || q.includes('residual plot')) {
-        const reg = getLinearRegression(xs, ys);
-        const residuals = xs.map((x, i) => ys[i] - (reg.slope * x + reg.intercept));
-        const resMean = getMean(residuals);
-        const resSD = getStdDev(residuals);
-        
-        let residMd = `### ðŸ“‰ Analysis of Residual Errors\n` + mappingNote;
-        residMd += `â€¢ **Mean Residual:** \`${resMean.toExponential(4)}\` (guaranteed ~0 in OLS)\n`;
-        residMd += `â€¢ **Residual Standard Deviation:** \`${resSD.toFixed(4)}\`\n`;
-        residMd += `â€¢ **Range:** \`${Math.min(...residuals).toFixed(4)}\` to \`${Math.max(...residuals).toFixed(4)}\`\n\n`;
-        
-        const counts = [0, 0, 0, 0];
-        residuals.forEach(r => {
-          const val = r / resSD;
-          if (val < -1.5) counts[0]++;
-          else if (val < 0) counts[1]++;
-          else if (val < 1.5) counts[2]++;
-          else counts[3]++;
-        });
-        
-        residMd += `#### Standardized Residual Error Distribution:\n`;
-        residMd += `â€¢ **<-1.5 SD:** ${counts[0]} points (${((counts[0]/n)*100).toFixed(1)}%)\n`;
-        residMd += `â€¢ **-1.5 to 0 SD:** ${counts[1]} points (${((counts[1]/n)*100).toFixed(1)}%)\n`;
-        residMd += `â€¢ **0 to 1.5 SD:** ${counts[2]} points (${((counts[2]/n)*100).toFixed(1)}%)\n`;
-        residMd += `â€¢ **>1.5 SD:** ${counts[3]} points (${((counts[3]/n)*100).toFixed(1)}%)\n\n`;
-        const skRes = getSkewnessAndKurtosis(residuals);
-        const normalityPass = Math.abs(skRes.skewness) <= 1.0 && Math.abs(skRes.kurtosis) <= 3.5;
-        residMd += `**Residual Normality:** Skewness = \`${skRes.skewness.toFixed(4)}\`, Kurtosis = \`${skRes.kurtosis.toFixed(4)}\` â†’ **${normalityPass ? 'âœ… Approximately normal' : 'âš ï¸ Departures from normality detected'}**\n\n`;
-        residMd += `*All residuals computed from \`${cntCol} - (${reg.slope.toFixed(4)} × ${valCol} + ${reg.intercept.toFixed(4)})\` on ${n} paired observations.*`;
-        return residMd;
-      }
-
-      // 10. Anomalous points
-      if (q.includes('anomal') || q.includes('outlier')) {
-        const reg = getLinearRegression(xs, ys);
-        const residuals = xs.map((x, i) => ys[i] - (reg.slope * x + reg.intercept));
-        const resSD = getStdDev(residuals);
-        
-        const anomalies: any[] = [];
-        rows.forEach((row, i) => {
-          const resid = residuals[i];
-          if (Math.abs(resid) > 2 * resSD) {
-            anomalies.push({
-              index: i + 1,
-              [valCol]: row[valCol],
-              [cntCol]: row[cntCol],
-              residual: resid,
-              stdResid: resid / resSD
-            });
-          }
-        });
-        
-        let anomalyMd = `### ðŸš¨ Anomalous Data Points (Residual Outliers)\n` + mappingNote;
-        anomalyMd += `â€¢ **Total Anomalies Found:** \`${anomalies.length}\` out of \`${n}\` points (${((anomalies.length / n) * 100).toFixed(2)}% of dataset).\n\n`;
-        anomalyMd += `#### Top 5 Most Extreme Outliers:\n`;
-        anomalyMd += `| ID | ${valCol} | ${cntCol} | Raw Residual | Standardized Residual | Type |\n`;
-        anomalyMd += `| --- | --- | --- | --- | --- | --- |\n`;
-        
-        anomalies.sort((a, b) => Math.abs(b.stdResid) - Math.abs(a.stdResid))
-          .slice(0, 5)
-          .forEach(a => {
-            const type = a.stdResid > 0 ? 'ðŸ”´ High Outlier' : 'ðŸ”µ Low Outlier';
-            anomalyMd += `| #${a.index} | ${a[valCol].toFixed(2)} | ${a[cntCol]} | ${a.residual.toFixed(4)} | ${a.stdResid.toFixed(4)} | ${type} |\n`;
-          });
-        return anomalyMd;
-      }
-
-      // 11. Skewness / Kurtosis
-      if (q.includes('skewness') || q.includes('kurtosis')) {
-        const skVal = getSkewnessAndKurtosis(ys);
-        const skX = getSkewnessAndKurtosis(xs);
-        
-        let skewMd = `### ðŸ“ Skewness and Kurtosis (Shape of Distribution)\n` + mappingNote;
-        skewMd += `#### Dependent Variable: \`${cntCol}\`\n`;
-        skewMd += `â€¢ **Skewness:** \`${skVal.skewness.toFixed(4)}\` (${Math.abs(skVal.skewness) < 0.1 ? 'Symmetric' : skVal.skewness > 0 ? 'Right-skewed' : 'Left-skewed'})\n`;
-        skewMd += `â€¢ **Excess Kurtosis:** \`${skVal.kurtosis.toFixed(4)}\` (${skVal.kurtosis < 0 ? 'Platykurtic' : 'Leptokurtic'})\n\n`;
-        skewMd += `#### Independent Variable: \`${valCol}\`\n`;
-        skewMd += `â€¢ **Skewness:** \`${skX.skewness.toFixed(4)}\` | **Kurtosis:** \`${skX.kurtosis.toFixed(4)}\`\n`;
-        return skewMd;
-      }
-
-      // 12. Group values into bins (Sturges' rule for bin count)
-      if (q.includes('group values') || q.includes('bins') || q.includes('average count for each bin')) {
-        const minX = Math.min(...xs), maxX = Math.max(...xs);
-        // Sturges' rule: k = ceil(log2(n) + 1)
-        const k = Math.max(3, Math.ceil(Math.log2(n) + 1));
-        const binWidth = (maxX - minX) / k;
-        const bins: Array<{ label: string; min: number; max: number; sumY: number; count: number }> = [];
-        for (let i = 0; i < k; i++) {
-          const lo = minX + i * binWidth;
-          const hi = i === k - 1 ? maxX + 1e-9 : lo + binWidth;
-          bins.push({ label: `${lo.toFixed(2)}â€“${(lo + binWidth).toFixed(2)}`, min: lo, max: hi, sumY: 0, count: 0 });
-        }
-        pairs.forEach(p => {
-          const bin = bins.find(b => p.x >= b.min && p.x < b.max);
-          if (bin) { bin.sumY += p.y; bin.count++; }
-        });
-        const allAvgs = bins.filter(b => b.count > 0).map(b => b.sumY / b.count);
-        const maxAvg = Math.max(...allAvgs);
-        let binMd = `### ðŸ“Š Binned Analysis: \`${valCol}\` â†’ avg \`${cntCol}\` (Sturges' rule, k=${k} bins)\n` + mappingNote;
-        binMd += `| Bin Range | Count | Mean \`${cntCol}\` | Std Dev | Visual |\n`;
-        binMd += `| --- | --- | --- | --- | --- |\n`;
-        bins.filter(b => b.count > 0).forEach(b => {
-          const avg = b.sumY / b.count;
-          const rowYs = pairs.filter(p => p.x >= b.min && p.x < b.max).map(p => p.y);
-          const sd = rowYs.length > 1 ? getStdDev(rowYs) : 0;
-          const barLen = maxAvg > 0 ? Math.round((avg / maxAvg) * 20) : 0;
-          const bar = 'â–ˆ'.repeat(barLen) + 'â–‘'.repeat(Math.max(0, 20 - barLen));
-          binMd += `| **${b.label}** | ${b.count} | **${avg.toFixed(4)}** | Â±${sd.toFixed(4)} | \`${bar}\` |\n`;
-        });
-        return binMd;
-      }
-
-      // 13. Top 5 records
-      if (q.includes('top 5')) {
-        const sorted = [...rows].sort((a, b) => Number(b[cntCol]) - Number(a[cntCol])).slice(0, 5);
-        
-        // Dynamically pick a few extra context columns to display
-        const contextCols = allCols.filter(c => c !== valCol && c !== cntCol).slice(0, 4);
-        
-        let topMd = `### ðŸ† Top 5 Records with Highest \`${cntCol}\`\n` + mappingNote;
-        const headerCols = [cntCol, valCol, ...contextCols];
-        topMd += `| Rank | Row | ` + headerCols.map(c => `\`${c}\``).join(' | ') + ` |\n`;
-        topMd += `| --- | --- | ` + headerCols.map(() => '---').join(' | ') + ` |\n`;
-        
-        sorted.forEach((r, idx) => {
-          const rowIdx = rows.indexOf(r) + 1;
-          const vals = headerCols.map(c => {
-            const v = r[c];
-            return (typeof v === 'number' || !isNaN(Number(v))) ? Number(v).toFixed(2) : (v ?? 'N/A');
-          });
-          topMd += `| **#${idx + 1}** | ${rowIdx} | **${vals[0]}** | ${vals.slice(1).join(' | ')} |\n`;
-        });
-        return topMd;
-      }
-
-      // 14. Percentage contribution
-      if (q.includes('percentage contribution') || q.includes('value range')) {
-        const totalSum = ys.reduce((a, b) => a + b, 0);
-        
-        // Auto-calculate dynamic bins based on actual data range
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const rangeSpan = maxX - minX;
-        const step = rangeSpan <= 3 ? 1.0 : rangeSpan <= 10 ? 2.0 : rangeSpan <= 20 ? 5.0 : 10.0;
-        const binStarts: number[] = [];
-        for (let b = Math.floor(minX / step) * step; b < maxX; b += step) {
-          binStarts.push(parseFloat(b.toFixed(2)));
-        }
-        const ranges = binStarts.map((start, i) => ({
-          label: `${start.toFixed(1)} â€“ ${(start + step).toFixed(1)}`,
-          min: start,
-          max: i === binStarts.length - 1 ? maxX + 0.001 : start + step,
-          sum: 0, count: 0
-        }));
-        
-        pairs.forEach(p => {
-          for (const range of ranges) {
-            if (p.x >= range.min && p.x < range.max) {
-              range.sum += p.y;
-              range.count++;
-              break;
-            }
-          }
-        });
-        
-        let pctMd = `### ðŸ“Š Percentage Contribution of \`${valCol}\` Ranges\n` + mappingNote;
-        pctMd += `| Value Range | Record Count | Sum of \`${cntCol}\` | % Contribution | Visual Share |\n`;
-        pctMd += `| --- | --- | --- | --- | --- |\n`;
-        
-        ranges.forEach(r => {
-          const pct = totalSum > 0 ? (r.sum / totalSum) * 100 : 0;
-          const barLen = Math.round(pct / 4);
-          const bar = 'â–ˆ'.repeat(barLen) + 'â–‘'.repeat(Math.max(0, 15 - barLen));
-          pctMd += `| **${r.label}** | ${r.count} | ${r.sum.toLocaleString(undefined, {maximumFractionDigits: 2})} | **${pct.toFixed(2)}%** | \`${bar}\` |\n`;
-        });
-        return pctMd;
-      }
-    } catch (err: any) {
-      console.warn('Statistical interception execution failure:', err);
-      return `âš ï¸ Failed to execute local statistical analysis: ${err.message}`;
-    }
-
-    return null;
-  };
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // CONTEXTUAL VISUALIZATION BUILDER
-  // Extracts chart data from actual dataset based on query intent.
-  // Called every time a statistical query is answered successfully.
-  // ═══════════════════════════════════════════════════════════════════════════
-  const buildVisualizationContext = (question: string, tableName: string): void => {
-    const q = question.toLowerCase();
-    try {
-      const tbl = getSqlTableName(tableName);
-      const rows = executeSQL(`SELECT * FROM ${tbl}`);
-      if (!rows || rows.length === 0) return;
-
-      // Check if it is a feature importance style query
-      const isFeatureImportanceQuery = 
-        q.includes('strongest relationship') ||
-        q.includes('relationship with') ||
-        q.includes('most related') ||
-        q.includes('feature importance') ||
-        q.includes('which feature');
-
-      if (isFeatureImportanceQuery) {
-        const result = runSafeCompute({ question, tableName, rows });
-        if (result.status === 'computed') {
-          setAnalyticalContext({
-            type: 'feature_importance',
-            title: `Predictors of ${result.targetSummary?.target}`,
-            valCol: '',
-            cntCol: result.targetSummary?.target || '',
-            scatterPairs: rows.map(() => ({ x: 0, y: 0, isOutlier: false })), // dummy to satisfy scatterPairs.length n count in UI
-            regSlope: 0,
-            regIntercept: 0,
-            regR2: 0,
-            histX: [],
-            histY: [],
-            topRows: result.rows.map(r => ({
-              rank: r.feature,
-              value: r.score,
-              extra: {
-                pValue: r.adjustedPValue,
-                method: r.method,
-                strength: r.strength,
-                direction: r.direction
-              }
-            })),
-            binRows: [],
-            pieSlices: [],
-            kpiCards: [
-              { label: 'Outcome Target', value: result.targetSummary?.target || 'None', sub: `Type: ${result.targetSummary?.detectedType}`, color: '#3b82f6' },
-              { label: 'Top Predictor', value: result.rows[0]?.feature || 'None', sub: `Score: ${(result.rows[0]?.score ?? 0).toFixed(4)}`, color: '#10b981' },
-              { label: 'Total Sample Size', value: result.audit.sampleSize.toLocaleString(), sub: `Skipped: ${result.audit.excludedFeaturesCount}`, color: '#8b5cf6' },
-              { label: 'Confidence Level', value: result.confidence, sub: `Warnings: ${result.warnings.length}`, color: result.confidence === 'High confidence' ? '#10b981' : result.confidence === 'Medium confidence' ? '#f59e0b' : '#ef4444' }
-            ],
-            xStats: { mean: result.warnings.length, std: 0, min: result.targetSummary?.detectedType === 'binary_categorical' ? 1 : 0, max: 0 },
-            yStats: { mean: 0, std: 0, min: 0, max: 0 },
-            targetSummary: result.targetSummary,
-            excludedFeatures: result.excludedFeatures,
-            warnings: result.warnings
-          });
-          return;
-        }
-      }
-
-      const allCols = Object.keys(rows[0]);
-      const numericCols = allCols.filter(c => {
-        const sample = rows.find(r => r[c] !== null && r[c] !== undefined && r[c] !== '');
-        return sample ? !isNaN(Number(sample[c])) : false;
-      });
-      if (numericCols.length < 1) return;
-
-      // Same smart column detection as runLocalStatisticalAnalysis
-      let valCol = '';
-      let cntCol = '';
-      const mentionedCols = numericCols.filter(c => {
-        const regex = new RegExp(`\\b${c.replace(/_/g, '[_ ]')}\\b`, 'i');
-        return regex.test(question);
-      });
-      if (mentionedCols.length >= 2) {
-        const positions = mentionedCols.map(c => ({ col: c, pos: question.toLowerCase().indexOf(c.toLowerCase()) })).sort((a, b) => a.pos - b.pos);
-        valCol = positions[0].col;
-        cntCol = positions[1].col;
-      } else if (mentionedCols.length === 1) {
-        valCol = mentionedCols[0];
-        const remaining = numericCols.filter(c => c !== valCol);
-        cntCol = allCols.includes('stress_level') ? 'stress_level' : (remaining[0] || '');
-      } else {
-        valCol = allCols.includes('sleep_hours') ? 'sleep_hours' : (allCols.includes('screen_time_before_sleep') ? 'screen_time_before_sleep' : (numericCols[0] || ''));
-        cntCol = allCols.includes('stress_level') ? 'stress_level' : (allCols.includes('anxiety_level') ? 'anxiety_level' : (numericCols.filter(c => c !== valCol)[0] || ''));
-      }
-      if (!valCol || !cntCol) return;
-
-      const pairs = rows.map(r => ({ x: Number(r[valCol]), y: Number(r[cntCol]) })).filter(p => !isNaN(p.x) && !isNaN(p.y));
-      const n = pairs.length;
-      if (n < 3) return;
-      const xs = pairs.map(p => p.x);
-      const ys = pairs.map(p => p.y);
-
-      // Core stats
-      const mean = (arr: number[]) => arr.reduce((s, v) => s + v, 0) / arr.length;
-      const variance = (arr: number[]) => { const m = mean(arr); return arr.reduce((s, v) => s + (v-m)**2, 0) / (arr.length - 1); };
-      const stdFn = (arr: number[]) => Math.sqrt(variance(arr));
-      const xStats = { mean: mean(xs), std: stdFn(xs), min: Math.min(...xs), max: Math.max(...xs) };
-      const yStats = { mean: mean(ys), std: stdFn(ys), min: Math.min(...ys), max: Math.max(...ys) };
-
-      // OLS regression
-      const meanX = xStats.mean, meanY = yStats.mean;
-      let Sxy = 0, Sxx = 0;
-      for (let i = 0; i < n; i++) { Sxy += (xs[i]-meanX)*(ys[i]-meanY); Sxx += (xs[i]-meanX)**2; }
-      const regSlope = Sxx === 0 ? 0 : Sxy / Sxx;
-      const regIntercept = meanY - regSlope * meanX;
-      let totalSS = 0, residSS = 0;
-      const residuals = pairs.map(p => {
-        const res = p.y - (regSlope * p.x + regIntercept);
-        totalSS += (p.y - meanY) ** 2;
-        residSS += res * res;
-        return res;
-      });
-      const regR2 = totalSS === 0 ? 0 : 1 - residSS / totalSS;
-      const seReg = n > 2 ? Math.sqrt(residSS / (n - 2)) : 0;
-      const pearsonR = (Sxx === 0 || totalSS === 0) ? 0 : Sxy / Math.sqrt(Sxx * totalSS);
-
-      // Scatter sample (max 400 points)
-      const step = Math.max(1, Math.floor(n / 400));
-      const scatterPairs = pairs
-        .filter((_, i) => i % step === 0)
-        .map((p, si) => ({
-          x: p.x, y: p.y,
-          isOutlier: Math.abs(residuals[si * step]) > 2.5 * seReg
-        }));
-
-      // Histograms (Sturges' rule)
-      const makeHist = (vals: number[], label: string) => {
-        const minV = Math.min(...vals), maxV = Math.max(...vals);
-        const k = Math.max(8, Math.ceil(Math.log2(vals.length) + 1));
-        const w = maxV === minV ? 1 : (maxV - minV) / k;
-        const bins = Array.from({ length: k }, (_, i) => ({ label: `${(minV + i * w).toFixed(1)}`, count: 0 }));
-        vals.forEach(v => { const idx = Math.min(Math.floor((v - minV) / w), k - 1); bins[idx].count++; });
-        return bins;
-      };
-      const histX = makeHist(xs, valCol);
-      const histY = makeHist(ys, cntCol);
-
-      // Top 5 records by cntCol — use real identifier column as label
-      const _idPrio = ['student_id','id','name','title','label','student','employee_id','user_id'];
-      const _labelCol = allCols.find(c => _idPrio.includes(c.toLowerCase()))
-        || allCols.find(c => {
-          if (c === cntCol || c === valCol) return false;
-          const s = rows.find((r) => r[c] !== null && r[c] !== undefined && r[c] !== '');
-          return s ? isNaN(Number(s[c])) : false;
-        }) || null;
-      const topRows = [...rows]
-        .sort((a, b) => Number(b[cntCol]) - Number(a[cntCol]))
-        .slice(0, 5)
-        .map((r, i) => ({
-          rank: _labelCol
-            ? String(r[_labelCol]).slice(0, 14)
-            : `${valCol}=${Number(r[valCol]).toFixed(1)}`,
-          value: Number(r[cntCol]),
-          xValue: Number(r[valCol]),
-          extra: Object.fromEntries(allCols.map(c => [c, r[c]])) as Record<string, unknown>
-        }));
-
-      // Bin averages of cntCol grouped by valCol ranges
-      const k = Math.max(5, Math.ceil(Math.log2(n) + 1));
-      const bw = (xStats.max - xStats.min) / k;
-      const binAccum = Array.from({ length: k }, (_, i) => ({ label: `${(xStats.min + i * bw).toFixed(1)}`, sumY: 0, sumY2: 0, count: 0 }));
-      pairs.forEach(p => {
-        const idx = bw === 0 ? 0 : Math.min(Math.floor((p.x - xStats.min) / bw), k - 1);
-        binAccum[idx].sumY += p.y;
-        binAccum[idx].sumY2 += p.y * p.y;
-        binAccum[idx].count++;
-      });
-      const binRows = binAccum.filter(b => b.count > 0).map(b => ({
-        label: b.label,
-        avg: parseFloat((b.sumY / b.count).toFixed(4)),
-        count: b.count,
-        sd: b.count > 1 ? parseFloat(Math.sqrt((b.sumY2 - b.sumY**2/b.count)/(b.count-1)).toFixed(4)) : 0
-      }));
-
-      // Pie slices (% contribution of valCol ranges to total ys sum)
-      const nSlices = Math.min(5, k);
-      const sw = nSlices === 0 ? 1 : (xStats.max - xStats.min) / nSlices;
-      const pieAccum = Array.from({ length: nSlices }, (_, i) => ({
-        name: `${(xStats.min + i * sw).toFixed(1)}â€“${(xStats.min + (i+1) * sw).toFixed(1)}`,
-        value: 0
-      }));
-      const totalY = ys.reduce((s, v) => s + v, 0);
-      if (totalY > 0) {
-        pairs.forEach(p => {
-          const idx = sw === 0 ? 0 : Math.min(Math.floor((p.x - xStats.min) / sw), nSlices - 1);
-          pieAccum[idx].value += p.y;
-        });
-        pieAccum.forEach(s => { s.value = parseFloat(((s.value / totalY) * 100).toFixed(2)); });
-      }
-      const pieSlices = pieAccum;
-
-      // Dynamic KPI cards from actual data
-      const kpiCards = [
-        { label: 'Pearson r', value: pearsonR.toFixed(4), sub: pearsonR >= 0 ? '▲ positive' : '▼ negative', color: pearsonR >= 0 ? '#22c55e' : '#ef4444' },
-        { label: 'R² (Fit)', value: regR2.toFixed(4), sub: `${(regR2 * 100).toFixed(1)}% variance explained`, color: '#8b5cf6' },
-        { label: `Mean ${valCol}`, value: xStats.mean.toFixed(2), sub: `σ = ${xStats.std.toFixed(2)}  ·  n=${n}`, color: '#3b82f6' },
-        { label: `Mean ${cntCol}`, value: yStats.mean.toFixed(2), sub: `σ = ${yStats.std.toFixed(2)}  ·  min ${yStats.min.toFixed(1)}`, color: '#10b981' },
-      ];
-
-      // Detect query type
-      let type = 'correlation';
-      let title = `${valCol} × ${cntCol}`;
-      if (q.includes('top 5') || q.includes('highest')) { type = 'top5'; title = `Top 5 by ${cntCol}`; }
-      else if (q.includes('histogram') || q.includes('frequency distribution')) { type = 'histogram'; title = `Distribution: ${cntCol}`; }
-      else if (q.includes('bins') || q.includes('group values into bins') || q.includes('average count for each bin')) { type = 'bins'; title = `Binned Averages: ${valCol} â†’ ${cntCol}`; }
-      else if (q.includes('percentage') || q.includes('value range')) { type = 'percentage'; title = `% Contribution by ${valCol} Range`; }
-      else if (q.includes('outlier') || q.includes('anomal')) { type = 'outlier'; title = `Anomaly Detection: ${valCol} vs ${cntCol}`; }
-      else if (q.includes('skewness') || q.includes('kurtosis')) { type = 'skew'; title = `Shape Analysis: ${cntCol}`; }
-      else if (q.includes('residual')) { type = 'residual'; title = `Residual Analysis: ${valCol} â†’ ${cntCol}`; }
-      else if (q.includes('regression') || q.includes('linear') || q.includes('predict') || q.includes('coefficient')) { type = 'regression'; title = `Regression: ${valCol} â†’ ${cntCol}`; }
-
-      setAnalyticalContext({ type, title, valCol, cntCol, scatterPairs, regSlope, regIntercept, regR2, histX, histY, topRows, binRows, pieSlices, kpiCards, xStats, yStats });
-    } catch (e) {
-      console.warn('[buildVisualizationContext] failed:', e);
-    }
-  };
 
   const handleAskAI = (overrideInput?: string) => {
     const inputToUse = (overrideInput || qaInput).trim();
@@ -2152,6 +997,10 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
 
       const runNewPipeline = async () => {
         try {
+          const isLoaded = await ensureTableLoaded(selectedDataset);
+          if (!isLoaded) {
+            throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage. Please re-upload this file on the Datasets page to enable analysis.`);
+          }
           const tableName = selectedDataset.name;
           const tbl = getSqlTableName(tableName);
           const rows = executeSQL(`SELECT * FROM ${tbl}`);
@@ -2184,9 +1033,12 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
           if (ws && selectedDataset && result.status !== 'error') {
             const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
             const intentRaw = (result as any).plan?.intent ?? '';
-            const chartType = intentRaw === 'correlation' ? 'scatter'
-              : intentRaw === 'filter' ? 'table'
-              : 'bar';
+            const chartObj = (result as any).chart;
+            const chartType = chartObj?.chartType ?? (intentRaw === 'correlation' ? 'scatter' : intentRaw === 'filter' ? 'table' : 'bar');
+            const xAxisKey = chartObj?.xAxisKey ?? '';
+            const yAxisKey = chartObj?.yAxisKey ?? '';
+            const chartTitle = chartObj?.title ?? '';
+
             saveQuery({
               workspace_id: ws.id,
               dataset_id: selectedDataset.id,
@@ -2194,6 +1046,9 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
               generated_sql: (result as any).provenance?.sql ?? '',
               result_data: resultRows.slice(0, 500), // cap to 500 rows for storage
               chart_type: chartType,
+              x_axis_key: xAxisKey,
+              y_axis_key: yAxisKey,
+              chart_title: chartTitle,
               insights: (result as any).insights ?? [],
               execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
               row_count: resultRows.length,
@@ -2258,125 +1113,78 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
       return; // Return early! Bypasses all legacy code.
     }
 
-    // --- LEGACY ROLLBACK PATH ---
-    // Staged loading transitions
-    setTimeout(() => setLoadingStage(1), 200);
-    setTimeout(() => setLoadingStage(2), 450);
-    setTimeout(() => setLoadingStage(3), 650);
-    
-    setTimeout(() => {
-      // Intercept statistical queries
-      if (selectedDataset) {
-        const statResult = runLocalStatisticalAnalysis(inputToUse, selectedDataset.name);
-        if (statResult) {
-          setQaResponse(statResult);
-          buildVisualizationContext(inputToUse, selectedDataset.name);
-          setIsFilterQueryActive(false);
-          setQaLoading(false);
-          return;
-        }
-      }
+    // --- FALLBACK: No workspace pipeline but dataset is available ---
+    // Route through the same domain analytics pipeline even without workspace mode.
+    // This ensures ONE pipeline handles ALL analysis — no legacy filter parsing.
+    if (selectedDataset) {
+      setTimeout(() => setLoadingStage(1), 200);
+      setTimeout(() => setLoadingStage(2), 450);
+      setTimeout(() => setLoadingStage(3), 650);
 
-      const query = inputToUse.toLowerCase();
-      
-      let matchGender = false;
-      let matchPlatform = false;
-      let matchAge = false;
-      
-      const newGender = { male: true, female: true };
-      const newPlatform = { Instagram: true, TikTok: true, YouTube: true, Snapchat: true, Twitter: true };
-      let newAgeRange: [number, number] = [13, 19];
-      
-      let explainStr = '';
-      
-      // Parse gender â€” use word-boundary regex so 'female' doesn't accidentally
-      // match the substring 'male'. Handle 'both genders mentioned' case too.
-      const hasFemale = query.includes('female') || query.includes('girl') ||
-                        query.includes('woman') || query.includes('women');
-      const hasMale = /\bmale\b/.test(query) || query.includes('boy') ||
-                      /\bman\b/.test(query) || /\bmen\b/.test(query);
-      if (hasFemale && !hasMale) {
-        newGender.male = false;
-        newGender.female = true;
-        matchGender = true;
-        explainStr += 'filtered to female users';
-      } else if (hasMale && !hasFemale) {
-        newGender.male = true;
-        newGender.female = false;
-        matchGender = true;
-        explainStr += 'filtered to male users';
-      }
-      // if both are present â†’ keep newGender = { male: true, female: true } (no filter)
-      
-      // Parse platform
-      const plats = ['instagram', 'tiktok', 'youtube', 'snapchat', 'twitter'];
-      const matchedPlats: string[] = [];
-      plats.forEach(p => {
-        if (query.includes(p)) {
-          matchedPlats.push(p);
+      const runFallbackPipeline = async () => {
+        try {
+          const isLoaded = await ensureTableLoaded(selectedDataset);
+          if (!isLoaded) {
+            throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage. Please re-upload this file on the Datasets page to enable analysis.`);
+          }
+          const tableName = selectedDataset.name;
+          const tbl = getSqlTableName(tableName);
+          const rows = executeSQL(`SELECT * FROM ${tbl}`);
+          const profile = DatasetValidator.profile(rows, tableName);
+          
+          const context = {
+            tableName,
+            rows,
+            profile,
+            bypassMetadataCheck: false,
+          };
+          
+          const result = await runAnalyticsQuestion(inputToUse, context);
+          
+          setQaResponse(result);
+          setAnalyticalContext(null);
+          setIsFilterQueryActive(false);
+
+          // Save query to history
+          if (ws && result.status !== 'error') {
+            const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
+            const intentRaw = (result as any).plan?.intent ?? '';
+            const chartType = intentRaw === 'correlation' ? 'scatter'
+              : intentRaw === 'filter' ? 'table'
+              : 'bar';
+            saveQuery({
+              workspace_id: ws.id,
+              dataset_id: selectedDataset.id,
+              question: inputToUse,
+              generated_sql: (result as any).provenance?.sql ?? '',
+              result_data: resultRows.slice(0, 500),
+              chart_type: chartType,
+              insights: (result as any).insights ?? [],
+              execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
+              row_count: resultRows.length,
+            }).catch(e => console.warn('Failed to save query to history:', e));
+          }
+        } catch (err: any) {
+          console.error('Error in fallback analytics pipeline:', err);
+          setQaResponse({
+            status: 'error',
+            debugId: `err_${Date.now()}`,
+            message: err.message || 'An unexpected error occurred in the analytics pipeline.',
+            provenance: { question: inputToUse, planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
+          });
+          setAnalyticalContext(null);
+        } finally {
+          setQaLoading(false);
         }
-      });
-      
-      if (matchedPlats.length > 0) {
-        Object.keys(newPlatform).forEach(k => {
-          (newPlatform as any)[k] = matchedPlats.includes(k.toLowerCase());
-        });
-        matchPlatform = true;
-        if (explainStr) explainStr += ' on ';
-        explainStr += matchedPlats.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join('/');
-      }
-      
-      // Parse age
-      const ageMatches = query.match(/(\d+)\s*to\s*(\d+)/) || query.match(/between\s*(\d+)\s*and\s*(\d+)/);
-      const ageSingleMax = query.match(/under\s*(\d+)/) || query.match(/younger than\s*(\d+)/) || query.match(/<\s*(\d+)/);
-      const ageSingleMin = query.match(/over\s*(\d+)/) || query.match(/older than\s*(\d+)/) || query.match(/>\s*(\d+)/);
-      
-      if (ageMatches) {
-        const minA = Math.max(13, parseInt(ageMatches[1]));
-        const maxA = Math.min(19, parseInt(ageMatches[2]));
-        newAgeRange = [minA, maxA];
-        matchAge = true;
-        if (explainStr) explainStr += ', ';
-        explainStr += `aged ${minA}-${maxA}`;
-      } else if (ageSingleMax) {
-        const maxA = Math.min(19, parseInt(ageSingleMax[1]));
-        newAgeRange = [13, maxA];
-        matchAge = true;
-        if (explainStr) explainStr += ', ';
-        explainStr += `aged under ${maxA}`;
-      } else if (ageSingleMin) {
-        const minA = Math.max(13, parseInt(ageSingleMin[1]));
-        newAgeRange = [minA, 19];
-        matchAge = true;
-        if (explainStr) explainStr += ', ';
-        explainStr += `aged over ${minA}`;
-      }
-      
-      if (matchGender || matchPlatform || matchAge) {
-        isNavigatingRef.current = true;
-        setGenderFilter(newGender);
-        setPlatformFilter(newPlatform);
-        setAgeRange(newAgeRange);
-        
-        // Push state to history manually
-        const newState = {
-          genderFilter: { ...newGender },
-          platformFilter: { ...newPlatform },
-          ageRange: [...newAgeRange] as [number, number]
-        };
-        setHistory(prev => [...prev.slice(0, historyIndex + 1), newState]);
-        setHistoryIndex(prev => prev + 1);
-        
-        setQaResponse(`ðŸ§  local Llama3: I parsed your question and ${explainStr}. The charts have been updated instantly.`);
-        setIsFilterQueryActive(true);
-        triggerCardHighlight('bar');
-      } else {
-        setQaResponse(`ðŸ§  local Llama3: I analyzed "${inputToUse}" using the active local model, but didn't find specific demographics or statistical patterns. Try asking a statistical query like: "Calculate Spearman correlation between sleep_hours and stress_level" or "Build linear regression to predict stress_level from sleep_hours".`);
-        setIsFilterQueryActive(false);
-      }
-      
+      };
+
+      runFallbackPipeline();
+    } else {
+      // No dataset selected — show helpful message
+      setQaResponse('Please upload and select a dataset first to run analytics.');
+      setIsFilterQueryActive(false);
       setQaLoading(false);
-    }, 800);
+    }
   };
 
   const handleSendChatMessage = () => {
@@ -2486,71 +1294,138 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
         triggerCardHighlight('bar');
       }
 
-      // Intercept statistical queries
       if (selectedDataset) {
-        const statResult = runLocalStatisticalAnalysis(currentInput, selectedDataset.name);
-        if (statResult) {
-          responseText += statResult;
-          buildVisualizationContext(currentInput, selectedDataset.name);
-          setIsFilterQueryActive(false);
-          setChatMessages(prev => [...prev, {
-            sender: 'ai',
-            text: responseText + `\n\nðŸ”’ *Executed local analysis â€” 0 bytes sent*`,
-            timestamp: new Date()
-          }]);
-          setChatLoading(false);
-          return;
-        }
-      }
+        const runChatQuery = async () => {
+          try {
+            const isLoaded = await ensureTableLoaded(selectedDataset);
+            if (!isLoaded) {
+              throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage. Please re-upload this file on the Datasets page to enable analysis.`);
+            }
+            const tableName = selectedDataset.name;
+            const tbl = getSqlTableName(tableName);
+            const rows = executeSQL(`SELECT * FROM ${tbl}`);
+            const profile = DatasetValidator.profile(rows, tableName);
+            const context = {
+              tableName,
+              rows,
+              profile,
+              bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
+            };
 
-      // 2. Perform the actual local database query using the SQL Engine
-      if (selectedDataset) {
-        try {
-          const queryResult = generateLocalQuery(currentInput, selectedDataset.name);
-          const rows = executeSQL(queryResult.sql);
+            const result = await runAnalyticsQuestion(currentInput, context);
 
-          if (rows && rows.length > 0) {
-            responseText += `**Local Query Output:**\n`;
-            
-            if (rows.length === 1) {
-              const row = rows[0];
-              Object.entries(row).forEach(([k, v]) => {
-                const formattedK = k.replace(/_/g, ' ');
-                const formattedV = typeof v === 'number' ? Number(v.toFixed(2)).toLocaleString() : String(v);
-                responseText += `â€¢ **${formattedK}**: ${formattedV}\n`;
-              });
-            } else {
-              responseText += `\n| ` + Object.keys(rows[0]).join(' | ') + ` |\n`;
-              responseText += `| ` + Object.keys(rows[0]).map(() => '---').join(' | ') + ` |\n`;
-              
-              rows.slice(0, 5).forEach((row: any) => {
-                responseText += `| ` + Object.values(row).map((v: any) => {
-                  return typeof v === 'number' ? Number(v.toFixed(2)).toLocaleString() : String(v);
-                }).join(' | ') + ` |\n`;
-              });
-              if (rows.length > 5) {
-                responseText += `\n*(Showing top 5 of ${rows.length} records)*\n`;
+            // Log results locally
+            try {
+              await EvalLogger.log(currentInput, result);
+            } catch (logErr) {
+              console.error('Failed to log evaluation run:', logErr);
+            }
+
+            setQaResponse(result);
+            setAnalyticalContext(null);
+
+            // Add snapshot to workspace store
+            useWorkspaceStore.getState().addAnalyticalSnapshot(currentInput, result);
+
+            // Save query to history
+            if (ws && selectedDataset && result.status !== 'error') {
+              const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
+              const intentRaw = (result as any).plan?.intent ?? '';
+              const chartType = intentRaw === 'correlation' ? 'scatter'
+                : intentRaw === 'filter' ? 'table'
+                : 'bar';
+              saveQuery({
+                workspace_id: ws.id,
+                dataset_id: selectedDataset.id,
+                question: currentInput,
+                generated_sql: (result as any).provenance?.sql ?? '',
+                result_data: resultRows.slice(0, 500),
+                chart_type: chartType,
+                insights: (result as any).insights ?? [],
+                execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
+                row_count: resultRows.length,
+              }).catch(e => console.warn('Failed to save query to history:', e));
+            }
+
+            // Contextual card injection (Phase 3 sheet matching)
+            if ((result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
+              try {
+                const visualContract = mapToVisualContract(result);
+                const targetSheetId = matchResultToSheet(result, activeWorkspace);
+                const intentChartMap: Record<string, 'bar' | 'scatter' | 'table' | 'kpi'> = {
+                  distribution: 'bar', grouped_average: 'bar', ranking: 'bar',
+                  comparison: 'bar', correlation: 'scatter', feature_importance: 'bar',
+                  filter: 'table', summary: 'kpi',
+                };
+                const chartType = intentChartMap[(result as any).plan?.intent] ?? 'bar';
+
+                setContextualCard({
+                  sheetId: targetSheetId,
+                  cardId: 'card_contextual_qa',
+                  question: currentInput,
+                  visualContract,
+                  intent: (result as any).plan?.intent || 'summary',
+                  chartType,
+                });
+                
+                // Auto switch sheets
+                setActiveSheetId(targetSheetId);
+                setBottomTab('workspace');
+              } catch (injectErr) {
+                console.warn('Failed to inject contextual card:', injectErr);
               }
             }
-            responseText += `\n\`\`\`sql\n${queryResult.sql}\n\`\`\``;
-          } else {
-            responseText += `I ran the local SQL query, but no matching rows were found.`;
+
+            let reply = '';
+            if (result.status === 'computed' || result.status === 'partial') {
+              reply = result.narrative;
+              if (result.plan && (result.plan as any).sql) {
+                reply += `\n\n\`\`\`sql\n${(result.plan as any).sql}\n\`\`\``;
+              } else if (result.plan && result.plan.intent === 'feature_importance') {
+                reply += `\n\n*Executed local feature importance analysis.*`;
+              }
+            } else if (result.status === 'blocked') {
+              reply = `🚨 **Dataset Safety Guard Intercepted**\n\n**Reason:** ${result.reason}`;
+            } else if (result.status === 'unsupported') {
+              if (matchGender || matchPlatform || matchAge) {
+                reply = '';
+              } else {
+                reply = `I'm sorry, I couldn't plan that analysis. ${result.explanation}`;
+                if (result.suggestedQuestions && result.suggestedQuestions.length > 0) {
+                  reply += `\n\n**Suggested Questions:**\n` + result.suggestedQuestions.map(q => `- ${q}`).join('\n');
+                }
+              }
+            } else if (result.status === 'clarify') {
+              reply = `I need clarification: ${result.clarification.message}`;
+            } else {
+              reply = `An error occurred: ${(result as any).message || 'Unknown error'}`;
+            }
+
+            setChatMessages(prev => [...prev, {
+              sender: 'ai',
+              text: responseText + reply + `\n\n🔒 *Executed local analysis — 0 bytes sent*`,
+              timestamp: new Date()
+            }]);
+          } catch (err: any) {
+            setChatMessages(prev => [...prev, {
+              sender: 'ai',
+              text: responseText + `Failed to execute local query: ${err.message}`,
+              timestamp: new Date()
+            }]);
+          } finally {
+            setChatLoading(false);
           }
-        } catch (err: any) {
-          responseText += `Failed to execute local query: ${err.message}`;
-        }
+        };
+
+        runChatQuery();
       } else {
-        responseText += `Please select a dataset to run queries.`;
+        setChatMessages(prev => [...prev, {
+          sender: 'ai',
+          text: responseText || `Please select a dataset to run queries.`,
+          timestamp: new Date()
+        }]);
+        setChatLoading(false);
       }
-
-      responseText += `\n\nðŸ”’ *Executed local analysis â€” 0 bytes sent*`;
-
-      setChatMessages(prev => [...prev, {
-        sender: 'ai',
-        text: responseText,
-        timestamp: new Date()
-      }]);
-      setChatLoading(false);
     }, 800);
   };
 
@@ -2606,7 +1481,12 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
 
     if (!isTableLoaded(tableName)) {
       setKpis({ sleep: 0, age: 0, stress: 0, records: 0 });
-      setColumnsList([]);
+      const metaCols = (selectedDataset.columns_meta || []).map((c: any) => ({
+        name: c.name,
+        type: (c.type === 'INTEGER' || c.type === 'DECIMAL' || c.type === 'number') ? 'number' as const : 'string' as const,
+        sample: null
+      }));
+      setColumnsList(metaCols);
       setGenderSleepData([]);
       setPlatformShareData([]);
       setScreenTimeStressData([]);
@@ -3128,7 +2008,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                 <span style={{ display: 'inline-block', animation: 'spin 1s infinite linear' }}>â³</span> Loading dataset into memory...
               </span>
             ) : (
-              `Local Power BI-style report â€¢ ${kpis.records.toLocaleString()} rows â€¢ ${(selectedDataset?.file_type || 'csv').toUpperCase()} loaded`
+              `Local Power BI-style report • ${(kpis.records > 0 ? kpis.records : selectedDataset?.row_count ?? 0).toLocaleString()} rows • ${(selectedDataset?.file_type || 'csv').toUpperCase()} loaded`
             )}
           </div>
         </div>
@@ -3546,7 +2426,7 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                   </div>
                 </div>
                 
-                <QuerySearchBar
+                <QueryPanel
                   qaLoading={qaLoading}
                   hasResponse={!!qaResponse}
                   hasContextualCard={!!useWorkspaceStore.getState().contextualCard}
@@ -3727,6 +2607,53 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                     </button>
                   </div>
                 </div>
+              ) : loadingTable ? (
+                /* Loading Table State */
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '1.25rem',
+                  padding: '3rem 2rem',
+                  background: '#0e0e12',
+                  border: '1.5px solid var(--rim)',
+                  borderRadius: '16px',
+                  flex: 1,
+                  minHeight: '400px',
+                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.01)'
+                }}>
+                  <div style={{ position: 'relative', width: 64, height: 64 }}>
+                    <div style={{
+                      position: 'absolute',
+                      top: 0, left: 0, width: '100%', height: '100%',
+                      borderRadius: '50%', background: 'rgba(239, 68, 68, 0.08)',
+                      boxShadow: '0 0 25px rgba(239, 68, 68, 0.2)',
+                      animation: 'pulse 1.8s infinite ease-in-out'
+                    }} />
+                    <div style={{
+                      width: '100%', height: '100%', borderRadius: '50%',
+                      border: '2px solid rgba(239, 68, 68, 0.1)',
+                      borderTopColor: '#ef4444', borderRightColor: '#ef4444',
+                      animation: 'spin 0.9s infinite linear'
+                    }} />
+                    <div style={{
+                      position: 'absolute', top: '50%', left: '50%',
+                      transform: 'translate(-50%, -50%)', color: '#ef4444'
+                    }}>
+                      <Database size={20} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f4f4f5', letterSpacing: '-0.01em' }}>
+                      Loading Dataset into Memory
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#71717a', display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'center' }}>
+                      <RefreshCw size={11} style={{ animation: 'spin 2s infinite linear' }} />
+                      <span>Parsing &amp; indexing <strong>{loadingTable}</strong>...</span>
+                    </div>
+                  </div>
+                </div>
               ) : qaLoading ? (
                 /* 2. Staged AI Loading State */
                 <div style={{
@@ -3834,72 +2761,50 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                    UNIFIED DASHBOARD SHELL â€” permanent operating system
                    All query types render inside this grid. Only data changes.
                    ═══════════════════════════════════════════════════════════════════ */
-                workspacePipelineEnabled && activeWorkspace && !hasQueryResult ? (
-                  /* STATE 4: Workspace Engine Canvas Dashboard */
-                  !showPredefinedReports ? (
-                    <WelcomeDashboard
+                (workspacePipelineEnabled && activeWorkspace && !hasQueryResult) || hasQueryResult ? (
+                  <ErrorBoundary fallbackTitle="Workspace Canvas Rendering Intercepted">
+                    <QueryResultCanvas
+                      workspacePipelineEnabled={workspacePipelineEnabled}
+                      activeWorkspace={activeWorkspace}
+                      hasQueryResult={!!hasQueryResult}
+                      showPredefinedReports={showPredefinedReports}
                       selectedDataset={selectedDataset}
-                      onSelectPrompt={(prompt) => handleAskAI(prompt)}
-                      onToggleDefaultReports={() => setShowPredefinedReports(true)}
+                      qaResponse={qaResponse}
+                      isDev={isDev}
+                      handleAskAI={handleAskAI}
+                      setShowPredefinedReports={setShowPredefinedReports}
+                      handleRunPresetQuestion={handleRunPresetQuestion}
+                      bypassDataset={bypassDataset}
+                      bypassedDatasets={bypassedDatasets}
                     />
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
-                      <ResultView 
-                        result={{
-                          status: 'computed',
-                          plan: { planId: 'workspace', intent: 'summary', confidence: 1, source: 'pattern' },
-                          data: { status: 'success', rows: [] },
-                          chart: { chartType: 'none' },
-                          narrative: '',
-                          provenance: { question: 'Workspace Canvas', planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
-                        }} 
-                      />
-                    </div>
-                  )
-                ) : hasQueryResult ? (
-                      /* STATE 3: Query Result Dashboard */
-                      <div ref={resultContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0.15rem' }}>
-                        {qaResponse && typeof qaResponse === 'object' && (
-                          <ResultView 
-                            result={qaResponse} 
-                            onSelectChoice={(choice) => handleRunPresetQuestion(choice.question)}
-                            onSelectQuestion={handleRunPresetQuestion} 
-                            onBypass={() => {
-                              if (selectedDataset && qaResponse.status === 'blocked' && qaResponse.provenance) {
-                                bypassDataset(selectedDataset.id);
-                                handleAskAI(qaResponse.provenance.question);
-                              }
-                            }}
-                          />
-                        )}
-                        {isDev && qaResponse && typeof qaResponse === 'object' && (
-                          <PlanPreview 
-                            plan={
-                              (qaResponse.status === 'computed' || qaResponse.status === 'partial')
-                                ? qaResponse.plan
-                                : (qaResponse.status === 'clarify')
-                                  ? qaResponse.clarification.choices[0]?.plan
-                                  : undefined
-                            } 
-                          />
-                        )}
-                      </div>
-                    ) : workspacePipelineEnabled ? (
+                  </ErrorBoundary>
+                ) : workspacePipelineEnabled && selectedDataset ? (
                       /* STATE 2: Ready State for New Engine */
-                      <QueryReadyState 
-                        datasetName={selectedDataset.name}
-                        rowCount={kpis.records > 0 ? kpis.records : selectedDataset.row_count ?? 0}
-                        columns={columnsList}
-                        suggestedQuestions={suggestedCards}
-                        onSelectField={(fieldName) => {
-                          setQaInput(prev => {
-                            const trimmed = prev.trim();
-                            if (!trimmed) return fieldName;
-                            return `${trimmed} ${fieldName}`;
-                          });
-                        }}
-                        onSelectQuestion={handleRunPresetQuestion}
-                      />
+                      <ErrorBoundary fallbackTitle="Query Ready State Rendering Intercepted">
+                        <QueryReadyState 
+                          datasetName={selectedDataset.name}
+                          rowCount={kpis.records > 0 ? kpis.records : selectedDataset.row_count ?? 0}
+                          columns={columnsList}
+                          suggestedQuestions={suggestedCards}
+                          onSelectField={(fieldName) => {
+                            setQaInput(prev => {
+                              const trimmed = prev.trim();
+                              if (!trimmed) return fieldName;
+                              return `${trimmed} ${fieldName}`;
+                            });
+                          }}
+                          onSelectQuestion={handleRunPresetQuestion}
+                        />
+                      </ErrorBoundary>
+                    ) : workspacePipelineEnabled && !selectedDataset ? (
+                      /* STATE 2b: No dataset selected — show placeholder */
+                      <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-center p-8">
+                        <div className="text-3xl">📊</div>
+                        <h3 className="text-sm font-bold text-zinc-300 uppercase tracking-wider">No Dataset Selected</h3>
+                        <p className="text-xs text-zinc-500 max-w-sm leading-relaxed">
+                          Go to the <strong>Datasets</strong> page to upload or select a dataset, then return here to analyze it.
+                        </p>
+                      </div>
                     ) : (
 
                     /* LEGACY MODE: Original static dashboard shell */
@@ -3943,8 +2848,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                     )}
                   </div>
 
-                  {/* â”€â”€ Collapsible Insight Banner (appears for stat queries) â”€â”€â”€â”€â”€â”€â”€ */}
-                  {analyticalContext && (() => {
+                  {/* ── Collapsible Insight Banner (appears for stat queries) ─────── */}
+                  {analyticalContext && !qaResponse && (() => {
                     const r2 = analyticalContext.regR2;
                     const pearson = analyticalContext.kpiCards[0]?.value;
                     const typeMap: Record<string, string> = {
@@ -4522,9 +3427,9 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                       </div>
 
                       {/* BOTTOM CENTER */}
-                      <div className="pv-card" style={{ background: 'linear-gradient(180deg,#0f0f14 0%,#0c0c10 100%)', border: '1.5px solid #1e1e28', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
-                        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.5rem' }}>Gender Summary Report</div>
-                        {genderSummaryTable.length > 0 ? (
+                      {genderSummaryTable.length > 0 && (
+                        <div className="pv-card" style={{ background: 'linear-gradient(180deg,#0f0f14 0%,#0c0c10 100%)', border: '1.5px solid #1e1e28', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.5rem' }}>Gender Summary Report</div>
                           <div style={{ overflowY: 'auto', height: 145 }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.62rem', textAlign: 'left' }}>
                               <thead>
@@ -4551,12 +3456,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
                               </tbody>
                             </table>
                           </div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 145, gap: '0.4rem' }}>
-                            <div style={{ fontSize: '0.62rem', color: '#3f3f46', textAlign: 'center' }}>Gender breakdown appears here<br />for mental health datasets</div>
-                          </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
 
                       {/* BOTTOM RIGHT */}
                       <div style={{ background: '#0e0e12', border: '1px solid #3c1417', borderRadius: '6px', padding: '0.75rem', minHeight: 185 }}>
@@ -4693,111 +3594,17 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
               </div>
             )}
 
-            {/* Bottom sheet page tabs */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.2rem',
-              fontSize: '0.68rem',
-              flexShrink: 0
-            }}>
-            {workspacePipelineEnabled && activeWorkspace ? (
-              activeWorkspace.sheets.map((sheet) => {
-                const isActive = activeSheetId === sheet.id;
-                const isSnapshot = sheet.id.startsWith('snapshot_');
-                return (
-                  <div
-                    key={sheet.id}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      background: isActive ? '#0e0e12' : 'transparent',
-                      color: isActive ? '#ef4444' : '#71717a',
-                      border: isActive ? '1px solid #3c1417' : '1px solid transparent',
-                      borderRadius: '4px 4px 0 0',
-                      padding: '3px 10px',
-                      fontSize: '0.65rem',
-                      fontWeight: isActive ? 700 : 500,
-                      gap: '4px'
-                    }}
-                  >
-                    <button
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'inherit',
-                        fontSize: 'inherit',
-                        fontWeight: 'inherit',
-                        cursor: 'pointer',
-                        padding: 0
-                      }}
-                      onClick={() => {
-                        setActiveSheetId(sheet.id);
-                        setQaResponse(null);
-                        setAnalyticalContext(null);
-                      }}
-                    >
-                      {sheet.name}
-                    </button>
-                    {sheet.id !== 'sheet_overview' && activeWorkspace.sheets[0]?.id !== sheet.id && (
-                      <button
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: '#52525b',
-                          cursor: 'pointer',
-                          fontSize: '0.55rem',
-                          padding: '0 2px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          lineHeight: 1
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
-                        onMouseLeave={e => e.currentTarget.style.color = '#52525b'}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          useWorkspaceStore.getState().removeAnalyticalSnapshot(sheet.id);
-                        }}
-                        title="Close sheet"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              ['Overview', 'Sleep Analysis', 'Stress Analysis', 'Platform Usage', 'Demographics'].map((tabName) => {
-                const isActive = bottomTab === tabName;
-                return (
-                  <button
-                    key={tabName}
-                    style={{
-                      background: isActive ? '#0e0e12' : 'transparent',
-                      color: isActive ? '#ef4444' : '#71717a',
-                      border: isActive ? '1px solid #3c1417' : '1px solid transparent',
-                      borderBottom: isActive ? '1px solid transparent' : '1px solid transparent',
-                      borderRadius: '4px 4px 0 0',
-                      padding: '3px 10px',
-                      fontSize: '0.65rem',
-                      fontWeight: isActive ? 700 : 500,
-                      cursor: 'pointer'
-                    }}
-                    onClick={() => setBottomTab(tabName)}
-                  >
-                    {tabName}
-                  </button>
-                );
-              })
-            )}
-                        <button 
-              style={{ background: 'transparent', border: 'none', color: '#71717a', fontSize: '0.8rem', padding: '0 6px', cursor: 'pointer' }}
-              onClick={() => alert('New analysis sheet tab added!')}
-            >
-              +
-            </button>
-          </div>
+            <WorkspaceTabs
+              workspacePipelineEnabled={workspacePipelineEnabled}
+              activeWorkspace={activeWorkspace}
+              activeSheetId={activeSheetId}
+              setActiveSheetId={setActiveSheetId}
+              setQaResponse={setQaResponse}
+              setAnalyticalContext={setAnalyticalContext}
+              bottomTab={bottomTab}
+              setBottomTab={setBottomTab}
+              onRemoveSnapshot={(sheetId) => useWorkspaceStore.getState().removeAnalyticalSnapshot(sheetId)}
+            />
 
           </div> {/* End DOCKED FOOTER AREA */}
         </div> {/* End LEFT AREA container wrapper */}
@@ -4874,307 +3681,27 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
               </div>
             )}
 
-            {/* Content Body Switcher */}
             {(!isMentalHealthSchema || activeRightTab === 'fields') ? (
-              /* FIELDS PANEL BODY RENDER */
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                {/* Search fields */}
-                <div style={{ padding: '0.55rem 0.85rem', borderBottom: '1px solid #1a1a24' }}>
-                  <div style={{ position: 'relative' }}>
-                    <Search size={11} style={{ position: 'absolute', left: 8, top: 7.5, color: '#52525b' }} />
-                    <input 
-                      type="text" 
-                      style={{ 
-                        height: 25, 
-                        fontSize: '0.65rem', 
-                        paddingLeft: '1.5rem', 
-                        background: '#121215', 
-                        borderColor: '#3c1417',
-                        borderWidth: '1px',
-                        borderStyle: 'solid',
-                        borderRadius: '4px',
-                        width: '100%',
-                        color: '#fff',
-                        outline: 'none'
-                      }}
-                      placeholder="Search fields..."
-                      value={fieldsSearch}
-                      onChange={(e) => setFieldsSearch(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                {/* Accordion List */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '0.45rem' }}>
-                  {selectedDataset && (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      
-                      {/* Accordion File Header */}
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '0.35rem', 
-                        fontSize: '0.65rem', 
-                        color: '#e4e4e7', 
-                        fontWeight: 700, 
-                        padding: '0.35rem 0.45rem', 
-                        background: '#121214',
-                        borderRadius: '4px',
-                        marginBottom: '0.25rem',
-                        textOverflow: 'ellipsis',
-                        overflow: 'hidden',
-                        whiteSpace: 'nowrap'
-                      }}>
-                        <span>▼</span>
-                        <span>📄</span> 
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{selectedDataset.name}</span>
-                      </div>
-                      
-                      {/* Fields list */}
-                      <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: '0.5rem' }}>
-                        {filteredColumns.map(col => {
-                          const isNum = col.type === 'number' || ['DECIMAL','INTEGER','BIGINT','FLOAT'].includes(col.type?.toUpperCase());
-                          return (
-                            <div 
-                              key={col.name} 
-                              style={{ 
-                                padding: '0.28rem 0.45rem', 
-                                display: 'flex', 
-                                alignItems: 'center', 
-                                gap: '0.4rem', 
-                                cursor: 'default',
-                                borderRadius: '3px',
-                                transition: 'background 0.1s'
-                              }}
-                              onMouseEnter={(e) => { e.currentTarget.style.background = '#121216'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                            >
-                              <span style={{ 
-                                fontFamily: 'var(--mono)', 
-                                fontSize: '0.54rem', 
-                                color: isNum ? '#ef4444' : '#3b82f6', 
-                                fontWeight: 800,
-                                width: '18px',
-                                display: 'inline-block'
-                              }}>
-                                {isNum ? '#' : 'Aa'}
-                              </span>
-                              <span style={{ fontSize: '0.68rem', color: '#a1a1aa' }}>{col.name}</span>
-                              {isNum && (
-                                <span style={{ marginLeft: 'auto', color: '#71717a', fontSize: '0.62rem', fontWeight: 600 }}>Σ</span>
-                              )}
-                              {col.is_he && (
-                                <span style={{ marginLeft: isNum ? '0.2rem' : 'auto', color: '#c084fc', fontSize: '0.6rem' }} title="Homomorphically Encrypted">🔒</span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                    </div>
-                  )}
-                </div>
-
-                {/* Visual Fields Builder Dropzone */}
-                <div style={{ padding: '0.55rem', borderTop: '1px solid #1a1a24' }}>
-                  <div style={{
-                    border: '1.5px dashed #451a1d',
-                    borderRadius: '6px',
-                    padding: '0.85rem 0.55rem',
-                    textAlign: 'center',
-                    background: 'rgba(239,68,68,0.01)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.35rem',
-                    cursor: 'default'
-                  }}>
-                    <div style={{ fontSize: '1.25rem' }}>▰</div>
-                    <span style={{ fontSize: '0.65rem', color: '#71717a', lineHeight: 1.3 }}>
-                      Drag data fields here to build visuals
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <DatasetProfilePanel
+                selectedDataset={selectedDataset}
+                columnsList={columnsList}
+                fieldsSearch={fieldsSearch}
+                setFieldsSearch={setFieldsSearch}
+              />
             ) : (
-              /* FILTERS PANEL BODY RENDER */
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                {/* Clear filters row */}
-                <div style={{
-                  padding: '0.55rem 0.85rem',
-                  borderBottom: '1px solid #1a1a24',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active filters</span>
-                  <button 
-                    style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '0.6rem', cursor: 'pointer', padding: 0 }}
-                    onClick={() => {
-                      setGenderFilter({ male: true, female: true });
-                      setPlatformFilter({ Instagram: true, TikTok: true, YouTube: true, Snapchat: true, Twitter: true });
-                      setAgeRange([13, 19]);
-                    }}
-                  >
-                    Clear filters
-                  </button>
-                </div>
-
-                {/* Search filters */}
-                <div style={{ padding: '0.55rem 0.85rem', borderBottom: '1px solid #1a1a24' }}>
-                  <div style={{ position: 'relative' }}>
-                    <Search size={11} style={{ position: 'absolute', left: 8, top: 7.5, color: '#52525b' }} />
-                    <input 
-                      type="text" 
-                      style={{ 
-                        height: 25, 
-                        fontSize: '0.65rem', 
-                        paddingLeft: '1.5rem', 
-                        background: '#121215', 
-                        borderColor: '#3c1417',
-                        borderWidth: '1px',
-                        borderStyle: 'solid',
-                        borderRadius: '4px',
-                        width: '100%',
-                        color: '#fff',
-                        outline: 'none'
-                      }}
-                      placeholder="Search filters..."
-                      value={filterSearch}
-                      onChange={(e) => setFilterSearch(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                {/* Scrollable list */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 0.85rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                  
-                  {/* Filter Section 1: Gender */}
-                  <div style={{ borderBottom: '1px solid #1a1a24', paddingBottom: '0.75rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
-                      <span>Gender</span>
-                      <span style={{ fontSize: '0.58rem', color: '#71717a' }}>is (All)</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                        <input 
-                          type="checkbox" 
-                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                          checked={genderFilter.male && genderFilter.female}
-                          onChange={handleSelectAllGender}
-                        />
-                        <span style={{ color: '#e4e4e7' }}>Select all</span>
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                        <input 
-                          type="checkbox" 
-                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                          checked={genderFilter.male} 
-                          onChange={() => setGenderFilter(prev => ({ ...prev, male: !prev.male }))}
-                        />
-                        <span style={{ color: '#e4e4e7' }}>male</span>
-                        <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>{baselineCounts.male}</span>
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                        <input 
-                          type="checkbox" 
-                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                          checked={genderFilter.female} 
-                          onChange={() => setGenderFilter(prev => ({ ...prev, female: !prev.female }))}
-                        />
-                        <span style={{ color: '#e4e4e7' }}>female</span>
-                        <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>{baselineCounts.female}</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Filter Section 2: Platform */}
-                  <div style={{ borderBottom: '1px solid #1a1a24', paddingBottom: '0.75rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
-                      <span>Platform</span>
-                      <span style={{ fontSize: '0.58rem', color: '#71717a' }}>is (All)</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                        <input 
-                          type="checkbox" 
-                          style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                          checked={Object.values(platformFilter).every(v => v)}
-                          onChange={handleSelectAllPlatform}
-                        />
-                        <span style={{ color: '#e4e4e7' }}>Select all</span>
-                      </label>
-                      {Object.keys(platformFilter).map((plat) => (
-                        <label key={plat} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}>
-                          <input 
-                            type="checkbox" 
-                            style={{ accentColor: '#ef4444', width: 12, height: 12 }} 
-                            checked={platformFilter[plat]} 
-                            onChange={() => setPlatformFilter(prev => ({ ...prev, [plat]: !prev[plat] }))}
-                          />
-                          <span style={{ color: '#e4e4e7' }}>{plat}</span>
-                          <span style={{ marginLeft: 'auto', fontSize: '0.58rem', color: '#71717a' }}>
-                            {(baselineCounts as any)[plat] || 0}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Filter Section 3: Age Range */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', fontWeight: 800, color: '#a1a1aa', marginBottom: '0.4rem' }}>
-                      <span>Age Range</span>
-                      <span style={{ color: '#ef4444', fontWeight: 700 }}>{ageRange[0]} - {ageRange[1]}</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                        <input 
-                          type="range" 
-                          min={13} 
-                          max={19} 
-                          value={ageRange[0]} 
-                          onChange={(e) => setAgeRange([parseInt(e.target.value), Math.max(parseInt(e.target.value), ageRange[1])])}
-                          style={{ flex: 1, accentColor: '#ef4444', height: 3 }} 
-                        />
-                        <input 
-                          type="range" 
-                          min={13} 
-                          max={19} 
-                          value={ageRange[1]} 
-                          onChange={(e) => setAgeRange([Math.min(parseInt(e.target.value), ageRange[0]), parseInt(e.target.value)])}
-                          style={{ flex: 1, accentColor: '#ef4444', height: 3 }} 
-                        />
-                      </div>
-                      <button 
-                        style={{
-                          background: 'transparent',
-                          border: '1px solid #3c1417',
-                          color: '#ef4444',
-                          borderRadius: '4px',
-                          padding: '3px 0',
-                          fontSize: '0.65rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          marginTop: '0.2rem',
-                          textAlign: 'center'
-                        }}
-                        onClick={() => alert('Filters restricted to age range ' + ageRange[0] + ' - ' + ageRange[1])}
-                      >
-                        Apply filter
-                      </button>
-                    </div>
-                  </div>
-
-                </div>
-
-                {/* Bottom indicator */}
-                <div style={{ padding: '0.55rem 0.85rem', borderTop: '1px solid #1a1a24', display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#71717a' }}>
-                  <span>Filters on all pages</span>
-                  <span>▶</span>
-                </div>
-              </div>
+              <CockpitFilters
+                genderFilter={genderFilter}
+                setGenderFilter={setGenderFilter}
+                platformFilter={platformFilter}
+                setPlatformFilter={setPlatformFilter}
+                ageRange={ageRange}
+                setAgeRange={setAgeRange}
+                filterSearch={filterSearch}
+                setFilterSearch={setFilterSearch}
+                baselineCounts={baselineCounts}
+                handleSelectAllGender={handleSelectAllGender}
+                handleSelectAllPlatform={handleSelectAllPlatform}
+              />
             )}
           </div>
         )}

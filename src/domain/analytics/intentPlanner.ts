@@ -166,6 +166,12 @@ export const IntentPlanner = {
       return { intent: 'grouped_average', confidence: 0.90 };
     }
 
+    // 5.5 Breakdown + "by" → grouped_average (must run BEFORE distribution check)
+    // "breakdown of salary by department" → grouped_average, NOT distribution
+    if (q.includes('breakdown') && q.includes(' by ')) {
+      return { intent: 'grouped_average', confidence: 0.90 };
+    }
+
     // 6. Distribution
     if (
       q.includes('distribution') ||
@@ -178,14 +184,14 @@ export const IntentPlanner = {
     }
 
     // 7. Filter
+    // Gate 'above'/'below' to require a number (e.g. "above 5", "below 3.5")
+    // to avoid matching phrases like "above average" or "above normal"
+    const hasAboveBelowWithNumber = /\b(?:above|below|greater than|less than)\s+\d/.test(q);
     if (
       q.includes('show users') ||
       q.includes('show records') ||
       q.includes('filter by') ||
-      q.includes('above') ||
-      q.includes('below') ||
-      q.includes('greater than') ||
-      q.includes('less than') ||
+      hasAboveBelowWithNumber ||
       q.includes('equal to') ||
       q.includes('where')
     ) {

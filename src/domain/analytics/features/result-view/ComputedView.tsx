@@ -19,6 +19,7 @@ import { useCockpitStore } from '../../../../store/useCockpitStore';
 import { useWorkspaceStore } from '../../../../store/useWorkspaceStore';
 import { ComposedChart } from 'recharts';
 import { AnalyticsTable } from '../../../../components/AnalyticsTable';
+import UnifiedChart from '../../../../components/UnifiedChart';
 
 
 // Self-contained inline markdown formatter for the narrative
@@ -129,12 +130,17 @@ const compileFactsNarrative = (workspace: any, results: any): string => {
         const r = result.rValue;
         const p = result.pValue;
         const slope = result.trendSlope;
+        const sampleSize = result.sampleSize || 0;
         const sign = p < 0.05 ? 'statistically significant' : 'not statistically significant';
         const direction = r > 0 ? 'positive' : 'negative';
         const strength = Math.abs(r) > 0.5 ? 'strong' : Math.abs(r) > 0.2 ? 'moderate' : 'weak';
         
         text += `* **Relationship Analysis:** Pearson correlation test reveals a **${strength} ${direction}** relationship between **${result.xAxisLabel}** and **${result.yAxisLabel}** (r = **${r.toFixed(3)}**, p = **${p.toFixed(4)}**).\n`;
-        text += `* **Significance:** This finding is **${sign}** at the 95% confidence level.\n`;
+        text += `* **Significance:** This finding is **${sign}** at the α = 0.05 threshold`;
+        if (sampleSize > 0 && sampleSize < 30) {
+          text += ` *(caution: small sample size, n = ${sampleSize})*`;
+        }
+        text += `. Significance reflects statistical reliability, not necessarily practical importance.\n`;
         text += `* **Trend Slope:** For every 1-unit increase in **${result.xAxisLabel}**, **${result.yAxisLabel}** is expected to change by **${slope.toFixed(3)}** units.\n`;
       } else if (result.kind === 'distributionBins') {
         const bins = result.data || [];
@@ -154,9 +160,9 @@ const compileFactsNarrative = (workspace: any, results: any): string => {
   text += `## 📋 Local Data-Driven Guidelines\n\n`;
   text += `> [!NOTE]\n`;
   text += `> All interpretations above are computed 100% locally on your machine using private sandboxed engines with zero external network leakage.\n\n`;
-  text += `1. **Targeted Interventions:** Prioritize groups exhibiting elevated risk markers as identified in the grouped rankings.\n`;
-  text += `2. **Correlational Drivers:** Pay close attention to significant correlations (p < 0.05) as they suggest reliable, actionable points of impact.\n`;
-  text += `3. **Sample Distribution:** Ensure your operational focus aligns with the major bins in your record distribution to achieve maximum efficiency.`;
+  text += `1. **Analytical Basis:** All findings are derived directly from observed sample distributions and calculated statistics.\n`;
+  text += `2. **Correlational Drivers:** Significant correlations (p < 0.05) indicate observed linear co-variation, not causation.\n`;
+  text += `3. **Sample Context:** Ensure operational decisions consider total sample size (n) and category representation.`;
 
   return text;
 };
@@ -438,8 +444,8 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
 
   const memoryInfo = React.useMemo(() => {
     let bytes = 12.5 * 1024 * 1024; // default baseline of 12.5MB
-    if (committedVisual && committedVisual.data) {
-      const dataStr = JSON.stringify(committedVisual.data);
+    if (committedVisual && (committedVisual as any).data) {
+      const dataStr = JSON.stringify((committedVisual as any).data);
       bytes += dataStr.length * 2;
     }
     const mb = bytes / (1024 * 1024);
@@ -565,222 +571,33 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                   <PremiumNarrativePanel text={cardResult.notes || ''} />
                 </div>
               ) : (card.chartType === 'table' || cardResult.kind === 'tableRows') ? (
-                <AnalyticsTable rows={cardResult.data || cardResult} />
-              ) : (card.chartType === 'pie' || card.chartType === 'donut') ? (
-                (() => {
-                  const pieData = cardResult.kind === 'groupedAverages'
-                    ? cardResult.data.map(item => ({ name: item.category, value: item.value }))
-                    : cardResult.kind === 'distributionBins'
-                    ? cardResult.data.map(item => ({ name: item.binRange, value: item.count }))
-                    : [];
-                  
-                  const total = pieData.reduce((acc, x) => acc + x.value, 0);
-
-                  return (
-                    <div className="w-full h-full flex items-center justify-between relative" style={{ minHeight: '210px' }}>
-                      <div className="relative" style={{ width: '55%', height: '210px' }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie 
-                              data={pieData} 
-                              cx="50%" 
-                              cy="50%" 
-                              innerRadius={card.chartType === 'donut' ? 32 : 0} 
-                              outerRadius={55} 
-                              paddingAngle={3} 
-                              dataKey="value"
-                            >
-                              {pieData.map((_, idx) => (
-                                <Cell key={`cell-${idx}`} fill={POWER_BI_COLORS[idx % POWER_BI_COLORS.length]} />
-                              ))}
-                            </Pie>
-                            <Tooltip contentStyle={{ background: '#0e0e12', borderColor: '#3c1417', color: '#fff', fontSize: '0.65rem' }} />
-                          </PieChart>
-                        </ResponsiveContainer>
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
-                          <div className="text-[12px] font-black text-zinc-100 leading-none">
-                            {total.toLocaleString()}
-                          </div>
-                          <div className="text-[7px] text-zinc-500 font-bold uppercase tracking-wider mt-0.5">
-                            Total
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex-1 flex flex-col gap-1.5 pl-3 border-l border-zinc-900/60 max-h-[190px] overflow-y-auto">
-                        {pieData.map((item, idx) => {
-                          const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : '0';
-                          return (
-                            <div key={idx} className="flex items-center gap-2 text-[10px]">
-                              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: POWER_BI_COLORS[idx % POWER_BI_COLORS.length] }} />
-                              <span className="text-zinc-400 flex-1 truncate font-medium" title={item.name}>
-                                {formatFieldName(item.name)}
-                              </span>
-                              <span className="font-bold text-zinc-200 tabular-nums">{pct}%</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()
+                <AnalyticsTable rows={(cardResult as any).data || cardResult} />
               ) : card.chartType === 'kpi' ? (
                 renderKpiCardContent(cardResult, card)
-              ) : card.chartType === 'bar' ? (
-                (() => {
-                  const barData = cardResult.kind === 'groupedAverages'
-                    ? cardResult.data.map(item => ({ name: item.category, value: item.value }))
-                    : cardResult.kind === 'distributionBins'
-                    ? cardResult.data.map(item => ({ name: item.binRange, value: item.count }))
-                    : cardResult.kind === 'correlationSummary'
-                    ? cardResult.data.map(item => ({ name: String(item.x), value: item.y }))
-                    : [];
-                  return (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={barData} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                        <defs>
-                          <linearGradient id={`glow_${sheetId}_${card.id}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#ef4444" stopOpacity={0.85} />
-                            <stop offset="100%" stopColor="#991b1b" stopOpacity={0.95} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
-                        <XAxis 
-                          dataKey="name" 
-                          stroke="#3f3f46" 
-                          fontSize={8}
-                          tickLine={false}
-                          tickFormatter={formatFieldName}
-                        />
-                        <YAxis 
-                          stroke="#3f3f46" 
-                          fontSize={8}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <Tooltip 
-                          contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
-                        />
-                        <Bar 
-                          dataKey="value" 
-                          fill={`url(#glow_${sheetId}_${card.id})`} 
-                          radius={[2, 2, 0, 0]}
-                          barSize={12}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  );
-                })()
-              ) : card.chartType === 'line' ? (
-                (() => {
-                  const lineData = cardResult.kind === 'groupedAverages'
-                    ? cardResult.data.map(item => ({ name: item.category, value: item.value }))
-                    : cardResult.kind === 'distributionBins'
-                    ? cardResult.data.map(item => ({ name: item.binRange, value: item.count }))
-                    : cardResult.kind === 'correlationSummary'
-                    ? cardResult.data.map(item => ({ name: String(item.x), value: item.y }))
-                    : [];
-                  return (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={lineData} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
-                        <XAxis 
-                          dataKey="name" 
-                          stroke="#3f3f46" 
-                          fontSize={8}
-                          tickLine={false}
-                          tickFormatter={formatFieldName}
-                        />
-                        <YAxis 
-                          stroke="#3f3f46" 
-                          fontSize={8}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <Tooltip 
-                          contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="value" 
-                          stroke="#22d3ee" 
-                          strokeWidth={1.5}
-                          dot={{ stroke: '#22d3ee', strokeWidth: 1, r: 2, fill: '#080405' }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  );
-                })()
-              ) : card.chartType === 'scatter' && cardResult.kind === 'correlationSummary' ? (
-                (() => {
-                  const aggregatedData = (() => {
-                    const map = new Map<string, { x: number, y: number, z: number }>();
-                    cardResult.data.forEach(item => {
-                      const key = `${item.x}_${item.y}`;
-                      const existing = map.get(key);
-                      if (existing) {
-                        existing.z += 1;
-                      } else {
-                        map.set(key, { x: item.x, y: item.y, z: 1 });
-                      }
-                    });
-                    return Array.from(map.values());
-                  })();
-
-                  return (
-                    <div className="w-full h-full flex flex-col justify-between gap-1.5">
-                      <div className="flex-1 border border-zinc-900/60 bg-zinc-950/20 rounded-lg relative overflow-hidden flex items-center justify-center min-h-[120px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <ScatterChart margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                            <CartesianGrid stroke="#141418" strokeDasharray="3 3" />
-                            <XAxis 
-                              type="number" 
-                              dataKey="x" 
-                              name={card.spec && 'xColumn' in card.spec ? card.spec.xColumn : 'X'} 
-                              stroke="#3f3f46" 
-                              fontSize={8}
-                              tickLine={false}
-                            />
-                            <YAxis 
-                              type="number" 
-                              dataKey="y" 
-                              name={card.spec && 'yColumn' in card.spec ? card.spec.yColumn : 'Y'} 
-                              stroke="#3f3f46" 
-                              fontSize={8}
-                              tickLine={false}
-                              axisLine={false}
-                            />
-                            <ZAxis type="number" dataKey="z" range={[20, 200]} />
-                            <Tooltip 
-                              cursor={{ strokeDasharray: '3 3' }}
-                              contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.65rem', borderRadius: '6px' }}
-                              formatter={(value, name) => {
-                                if (name === 'z') return [value, 'Count'];
-                                return [value, name];
-                              }}
-                            />
-                            <Scatter name="Data" data={aggregatedData} fill="#ef4444" />
-                          </ScatterChart>
-                        </ResponsiveContainer>
+              ) : (card.chartType === 'bar' || card.chartType === 'line' || card.chartType === 'pie' || card.chartType === 'donut' || card.chartType === 'scatter') ? (
+                <div className="w-full h-full flex flex-col justify-between gap-1.5">
+                  <div className={card.chartType === 'scatter' ? 'flex-1 border border-zinc-900/60 bg-zinc-950/20 rounded-lg relative overflow-hidden flex items-center justify-center min-h-[120px]' : 'w-full h-full'}>
+                    <UnifiedChart contract={cardResult} chartType={card.chartType} height={card.chartType === 'scatter' ? 140 : 210} />
+                  </div>
+                  {card.chartType === 'scatter' && cardResult.kind === 'correlationSummary' && (
+                    <div className="grid grid-cols-3 gap-1 text-[8px] font-mono shrink-0">
+                      <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
+                        <div className="text-zinc-600">Sample Size</div>
+                        <div className="text-zinc-300 font-bold">{cardResult.data.length}</div>
                       </div>
-                      <div className="grid grid-cols-3 gap-1 text-[8px] font-mono shrink-0">
-                        <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
-                          <div className="text-zinc-600">Sample Size</div>
-                          <div className="text-zinc-300 font-bold">{cardResult.data.length}</div>
-                        </div>
-                        <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
-                          <div className="text-zinc-600">Slope</div>
-                          <div className="text-zinc-300 font-bold">{cardResult.trendSlope.toFixed(3)}</div>
-                        </div>
-                        <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
-                          <div className="text-zinc-600">Significance</div>
-                          <div className={`font-bold ${cardResult.pValue < 0.05 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            p={cardResult.pValue.toFixed(3)}
-                          </div>
+                      <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
+                        <div className="text-zinc-600">Slope</div>
+                        <div className="text-zinc-300 font-bold">{cardResult.trendSlope.toFixed(3)}</div>
+                      </div>
+                      <div className="bg-zinc-950/30 border border-zinc-900/40 p-1 rounded text-center">
+                        <div className="text-zinc-600">Significance</div>
+                        <div className={`font-bold ${cardResult.pValue < 0.05 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          p={cardResult.pValue.toFixed(3)}
                         </div>
                       </div>
                     </div>
-                  );
-                })()
+                  )}
+                </div>
               ) : (
                 <div className="text-center text-[10px] text-zinc-500">Relational View Unsupported Inside Grid</div>
               )}
@@ -878,14 +695,18 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
           const chartType = contextualCard.chartType;
           const question = contextualCard.question;
 
-          // Build chart data from the visual contract
-          const barData: { name: string; value: number }[] = vc.kind === 'groupedAverages'
-            ? vc.data.map((r: any) => ({ name: String(r.category), value: Number(r.value) }))
+          // Build chart data from the visual contract (capped to top 15 items to prevent DOM/UI thread lockup)
+          const rawBarData: { name: string; value: number }[] = (vc.kind === 'groupedAverages' || vc.kind === 'comparisonSummary' || vc.kind === 'rankingSummary')
+            ? vc.data.map((r: any) => ({ name: String(r.category || r.group_label || r.rank_label || ''), value: Number(r.value || r.mean || r.metric_value || 0) }))
+            : vc.kind === 'featureImportance'
+            ? vc.data.map((r: any) => ({ name: String(r.feature || ''), value: Number(r.association || 0) }))
             : vc.kind === 'distributionBins'
-            ? vc.data.map((r: any) => ({ name: String(r.binRange), value: Number(r.count) }))
+            ? vc.data.map((r: any) => ({ name: String(r.binRange || ''), value: Number(r.count || 0) }))
             : vc.kind === 'correlationSummary'
-            ? vc.data.map((r: any) => ({ name: String(r.x), value: Number(r.y) }))
+            ? vc.data.map((r: any) => ({ name: String(r.x || 0), value: Number(r.y || 0) }))
             : [];
+
+          const barData = rawBarData.slice(0, 15);
 
           return (
             <div
@@ -1014,10 +835,34 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                   </ResponsiveContainer>
                 )}
 
-                {/* Fallback for table/kpi/filter results */}
+                {/* Fallback for table/kpi/filter/summary results */}
                 {barData.length === 0 && vc.kind !== 'correlationSummary' && (
-                  <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-500 pt-8">
-                    Result computed — see snapshot tab for full details.
+                  <div className="w-full flex flex-col justify-center gap-3 py-3 px-1">
+                    <div className="flex items-center justify-between bg-zinc-950/80 border border-amber-900/30 rounded-xl p-4 shadow-inner">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] font-black text-amber-500 uppercase tracking-widest mb-1">
+                          {(result as any)?.plan?.intent === 'summary' ? 'Total Records Count' : 'Computed Metric KPI'}
+                        </span>
+                        <span className="text-3xl font-black text-zinc-100 tabular-nums">
+                          {((vc as any).rowCount ?? (result as any)?.data?.metadata?.rowCount ?? (vc as any).data?.length ?? 0).toLocaleString()}
+                        </span>
+                        <span className="text-[9px] text-zinc-500 font-mono mt-1">
+                          Verified records scanned from active dataset
+                        </span>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-400 font-bold">
+                          {(vc as any).columns?.length || ((vc as any).data?.[0] ? Object.keys((vc as any).data[0]).length : 0)} Columns
+                        </div>
+                        <span className="text-[8px] font-mono text-zinc-600 uppercase">100% Client-Side Engine</span>
+                      </div>
+                    </div>
+
+                    {(vc as any).data && (vc as any).data.length > 0 && (
+                      <div className="max-h-44 overflow-y-auto border border-zinc-900/80 rounded-lg bg-zinc-950/60 p-2">
+                        <AnalyticsTable rows={(vc as any).data.slice(0, 10)} />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1082,7 +927,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
             <div className="cockpit-card p-4 flex-1 flex flex-col justify-center">
               <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-2 block">Facts Verification Engine</span>
               <p className="text-[10px] text-zinc-400 leading-relaxed">
-                The interpretive narrative to the right reads exclusively from the verified local computed facts. Generative temperature is set to <code className="bg-zinc-950 text-red-400 px-1 py-0.2 rounded font-mono text-[9px]">0.0</code> to prevent hallucinations, logical guessing, or external telemetry leakage.
+                The interpretive narrative to the right is compiled locally from verified computed facts using deterministic string templates. No LLM generation, external API calls, or telemetry leakage are involved.
               </p>
             </div>
           </div>
@@ -1208,39 +1053,44 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   // ─────────────────────────────────────────────────────────────────────────────
   const layout = React.useMemo(() => {
     if (committedVisual) {
+      const kind = committedVisual.kind;
       // Map visual contract kind to standard UI VisualLayout representation
-      const chartType = committedVisual.kind === 'groupedAverages' ? 'bar'
-                      : committedVisual.kind === 'correlationSummary' ? 'scatter'
-                      : committedVisual.kind === 'distributionBins' ? 'bar'
+      const chartType = (kind === 'groupedAverages' || kind === 'comparisonSummary' || kind === 'rankingSummary' || kind === 'featureImportance') ? 'bar'
+                      : kind === 'correlationSummary' ? 'scatter'
+                      : kind === 'distributionBins' ? 'bar'
                       : 'none';
                       
-      const xAxisKey = committedVisual.kind === 'groupedAverages' ? 'category'
-                     : committedVisual.kind === 'correlationSummary' ? 'x'
-                     : committedVisual.kind === 'distributionBins' ? 'binRange'
+      const xAxisKey = (kind === 'groupedAverages' || kind === 'comparisonSummary' || kind === 'rankingSummary') ? 'category'
+                     : kind === 'featureImportance' ? 'feature'
+                     : kind === 'correlationSummary' ? 'x'
+                     : kind === 'distributionBins' ? 'binRange'
                      : undefined;
 
-      const yAxisKey = committedVisual.kind === 'groupedAverages' ? 'value'
-                     : committedVisual.kind === 'correlationSummary' ? 'y'
-                     : committedVisual.kind === 'distributionBins' ? 'count'
+      const yAxisKey = (kind === 'groupedAverages' || kind === 'comparisonSummary' || kind === 'rankingSummary') ? 'value'
+                     : kind === 'featureImportance' ? 'association'
+                     : kind === 'correlationSummary' ? 'y'
+                     : kind === 'distributionBins' ? 'count'
                      : undefined;
 
       // Extract KPIs from visual contract properties
       const kpis: any[] = [];
       if (committedVisual.kind === 'correlationSummary') {
+        const rVal = Number(committedVisual.rValue ?? 0);
+        const pVal = Number(committedVisual.pValue ?? 1);
         kpis.push({
           label: 'Correlation (r)',
-          value: committedVisual.rValue.toFixed(3),
+          value: rVal.toFixed(3),
           subText: 'Pearson method',
-          color: Math.abs(committedVisual.rValue) > 0.4 ? '#10b981' : '#f59e0b',
+          color: Math.abs(rVal) > 0.4 ? '#10b981' : '#f59e0b',
         });
         kpis.push({
           label: 'Significance (p)',
-          value: committedVisual.pValue.toFixed(4),
-          subText: committedVisual.pValue < 0.05 ? 'Statistically significant' : 'Not significant',
-          color: committedVisual.pValue < 0.05 ? '#10b981' : '#ef4444',
+          value: pVal.toFixed(4),
+          subText: pVal < 0.05 ? 'Statistically significant' : 'Not significant',
+          color: pVal < 0.05 ? '#10b981' : '#ef4444',
         });
       } else if (committedVisual.kind === 'groupedAverages') {
-        const topGroup = committedVisual.data[0];
+        const topGroup = committedVisual.data && committedVisual.data[0];
         kpis.push({
           label: 'Grouped By',
           value: committedVisual.xAxisLabel || '',
@@ -1248,10 +1098,11 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
           color: '#f59e0b',
         });
         if (topGroup) {
+          const valNum = Number(topGroup.value ?? 0);
           kpis.push({
             label: 'Highest Avg Group',
-            value: topGroup.category || '',
-            subText: `Average: ${Number(topGroup.value).toFixed(2)}`,
+            value: String(topGroup.category ?? ''),
+            subText: `Average: ${isNaN(valNum) ? '0.00' : valNum.toFixed(2)}`,
             color: '#10b981',
           });
         }
@@ -1275,7 +1126,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
         chartType,
         xAxisKey,
         yAxisKey,
-        data: committedVisual.data || [],
+        data: (committedVisual as any).data || [],
         title: formatPanelTitle(committedVisual.kind),
         kpis,
       };
@@ -1618,7 +1469,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                       </span>
                     </div>
                     <div className="flex flex-col bg-zinc-950/40 border border-zinc-900/40 px-2.5 py-1 rounded">
-                      <span className="text-zinc-600">Slope (r)</span>
+                      <span className="text-zinc-600">Correlation (r)</span>
                       <span className="text-zinc-300 font-bold truncate">{layout.data[0].r.toFixed(4)}</span>
                     </div>
                     <div className="flex flex-col bg-zinc-950/40 border border-zinc-900/40 px-2.5 py-1 rounded">
@@ -1628,132 +1479,14 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                   </div>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  {layout.chartType === 'bar' ? (
-                    <BarChart data={layout.data} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                      <defs>
-                        <linearGradient id="redCoralGlow" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#ef4444" stopOpacity={0.85} />
-                          <stop offset="100%" stopColor="#991b1b" stopOpacity={0.95} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
-                      <XAxis 
-                        dataKey={layout.xAxisKey} 
-                        stroke="#3f3f46" 
-                        fontSize={9}
-                        tickLine={false}
-                        tickFormatter={formatFieldName}
-                      />
-                      <YAxis 
-                        stroke="#3f3f46" 
-                        fontSize={9}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <Tooltip 
-                        contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.68rem', borderRadius: '8px' }}
-                        labelStyle={{ color: '#a1a1aa', fontWeight: 700 }}
-                      />
-                      <Bar 
-                        dataKey={layout.yAxisKey || 'value'} 
-                        fill="url(#redCoralGlow)" 
-                        radius={[3, 3, 0, 0]}
-                        barSize={16}
-                      />
-                    </BarChart>
-                  ) : layout.chartType === 'line' ? (
-                    <LineChart data={layout.data} margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                      <defs>
-                        <linearGradient id="cyanVioletGlow" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.9} />
-                          <stop offset="100%" stopColor="#7c3aed" stopOpacity={0.9} />
-                        </linearGradient>
-                        <linearGradient id="cyanAreaGlow" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.15} />
-                          <stop offset="100%" stopColor="#22d3ee" stopOpacity={0.0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#141418" vertical={false} />
-                      <XAxis 
-                        dataKey={layout.xAxisKey} 
-                        stroke="#3f3f46" 
-                        fontSize={9}
-                        tickLine={false}
-                        tickFormatter={formatFieldName}
-                      />
-                      <YAxis 
-                        stroke="#3f3f46" 
-                        fontSize={9}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <Tooltip 
-                        contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.68rem', borderRadius: '8px' }}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey={layout.yAxisKey || 'value'} 
-                        stroke="url(#cyanVioletGlow)" 
-                        strokeWidth={2}
-                        dot={{ stroke: '#22d3ee', strokeWidth: 1.5, r: 2.5, fill: '#080405' }}
-                      />
-                    </LineChart>
-                  ) : layout.chartType === 'scatter' ? (
-                    <ScatterChart margin={{ top: 10, right: 10, bottom: 5, left: -25 }}>
-                      <CartesianGrid stroke="#141418" strokeDasharray="3 3" />
-                      <XAxis 
-                        type="number" 
-                        dataKey={layout.xAxisKey} 
-                        name={layout.xAxisKey} 
-                        stroke="#3f3f46" 
-                        fontSize={9}
-                        tickLine={false}
-                      />
-                      <YAxis 
-                        type="number" 
-                        dataKey={layout.yAxisKey} 
-                        name={layout.yAxisKey} 
-                        stroke="#3f3f46" 
-                        fontSize={9}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <ZAxis type="number" range={[45, 45]} />
-                      <Tooltip 
-                        cursor={{ strokeDasharray: '3 3' }}
-                        contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.68rem', borderRadius: '8px' }}
-                      />
-                      <Scatter name="Data" data={layout.data} fill="#ef4444" />
-                    </ScatterChart>
-                  ) : layout.chartType === 'pie' ? (
-                    <PieChart>
-                      <defs>
-                        <linearGradient id="coralGlowPie" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#ef4444" stopOpacity={0.8} />
-                          <stop offset="100%" stopColor="#991b1b" stopOpacity={0.9} />
-                        </linearGradient>
-                      </defs>
-                      <Pie
-                        data={layout.data}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={48}
-                        outerRadius={68}
-                        paddingAngle={3}
-                        dataKey={layout.yAxisKey || 'value'}
-                        nameKey={layout.xAxisKey || 'label'}
-                      >
-                        {layout.data.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={POWER_BI_COLORS[index % POWER_BI_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip 
-                        contentStyle={{ background: '#080405', borderColor: '#1f1f23', color: '#fff', fontSize: '0.68rem', borderRadius: '8px' }}
-                      />
-                    </PieChart>
-                  ) : null}
-                </ResponsiveContainer>
+                <UnifiedChart
+                  contract={committedVisual || undefined}
+                  data={layout.data}
+                  chartType={layout.chartType}
+                  xAxisKey={layout.xAxisKey}
+                  yAxisKey={layout.yAxisKey}
+                  height={220}
+                />
               )}
             </div>
           </div>
@@ -1842,7 +1575,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                             className="p-2 max-w-[150px] truncate"
                             style={{ color: isNumeric ? '#3b82f6' : '#e4e4e7' }}
                           >
-                            {isNumeric ? (Number.isInteger(val) ? val.toLocaleString() : val.toFixed(2)) : String(val ?? '-')}
+                            {isNumeric && !isNaN(val) ? (Number.isInteger(val) ? val.toLocaleString() : val.toFixed(2)) : String(val ?? '-')}
                           </td>
                         );
                       })}

@@ -156,12 +156,21 @@ export default function DatasetsPage({ setPage }: P) {
     }
   };
 
+  const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB strict cap
+
   const handleFile = (f: File) => {
+    if (f.size > MAX_FILE_SIZE_BYTES) {
+      alert(`File "${f.name}" (${(f.size / (1024 * 1024)).toFixed(1)} MB) exceeds the maximum browser memory limit of 100 MB.\n\nPlease upload a file smaller than 100 MB.`);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
         const text = e.target?.result as string;
         setUpl(true);
+        // Yield control to browser rendering loop so UI spinner displays immediately
+        await new Promise(r => setTimeout(r, 20));
         
         let parsedRows: any[] = [];
         const isJson = f.name.toLowerCase().endsWith('.json');
@@ -290,7 +299,7 @@ export default function DatasetsPage({ setPage }: P) {
           <input ref={fileRef} type="file" accept=".csv,.parquet,.xlsx,.json" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
           <div className="uz-icon">{uploading ? '⏳' : '📂'}</div>
           <div className="uz-title">{uploading ? 'Processing locally...' : 'Drop file here or click to browse'}</div>
-          <div className="uz-desc">{uploading ? 'DuckDB processing — 0 bytes sent' : 'CSV · Parquet · Excel · JSON · Up to 100 GB'}</div>
+          <div className="uz-desc">{uploading ? 'DuckDB processing — 0 bytes sent' : 'CSV · Parquet · Excel · JSON · Up to 100 MB'}</div>
           {!uploading && <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', marginTop: '0.6rem' }}>{FT.map(f => <span key={f.ext} className={`tag tag-${f.color}`}>{f.icon} {f.ext.toUpperCase()}</span>)}</div>}
         </div>
 

@@ -30,7 +30,7 @@ export const DistributionExecutor = {
     const distributionRows: any[] = [];
 
     if (isNumeric) {
-      // Compute histogram bins (Sturges' formula or fixed bins, let's do 5 simple uniform bins)
+      // Compute histogram bins using Sturges' formula
       const sorted = [...numericVals].sort((a, b) => a - b);
       const min = sorted[0];
       const max = sorted[sorted.length - 1];
@@ -38,13 +38,14 @@ export const DistributionExecutor = {
 
       if (range === 0) {
         distributionRows.push({
+          binRange: `${min}`,
           binLabel: `${min}`,
           count: numericVals.length,
           minVal: min,
           maxVal: max,
         });
       } else {
-        const binCount = Math.min(5, numericVals.length);
+        const binCount = Math.ceil(Math.log2(numericVals.length) + 1);
         const binWidth = range / binCount;
 
         for (let i = 0; i < binCount; i++) {
@@ -55,8 +56,10 @@ export const DistributionExecutor = {
             i === binCount - 1 ? (v >= start && v <= end) : (v >= start && v < end)
           ).length;
 
+          const label = `${start.toFixed(1)} - ${end.toFixed(1)}`;
           distributionRows.push({
-            binLabel: `${start.toFixed(1)} - ${end.toFixed(1)}`,
+            binRange: label,
+            binLabel: label,
             count,
             minVal: start,
             maxVal: end,
@@ -73,6 +76,7 @@ export const DistributionExecutor = {
 
       for (const [key, count] of Object.entries(counts)) {
         distributionRows.push({
+          binRange: key,
           category_label: key,
           count,
         });

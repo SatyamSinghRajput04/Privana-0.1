@@ -94,11 +94,14 @@ export function resolveQATarget(question: string, schema: SchemaColumn[]): Resol
     }
   }
 
-  // If no target resolved but target outcomes like depression or anxiety are in the schema, use them as defaults
+  // If no target resolved, look for common target outcome column names/suffixes in the schema
   if (!target) {
-    const defaultTargets = ['depression_label', 'stress_level', 'anxiety_level', 'sleep_hours'];
-    for (const defT of defaultTargets) {
-      const found = schema.find(c => c.name.toLowerCase() === defT);
+    const defaultTargetKeywords = ['target', 'outcome', '_label', '_level', '_status', '_class', '_score', '_index'];
+    for (const keyword of defaultTargetKeywords) {
+      const found = schema.find(c => {
+        const name = c.name.toLowerCase();
+        return name === keyword || name.endsWith(keyword);
+      });
       if (found) {
         target = found.name;
         break;

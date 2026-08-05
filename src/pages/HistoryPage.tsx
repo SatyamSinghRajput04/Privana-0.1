@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import type { Workspace, Page } from '../App';
-import Chart from '../components/Chart';
+import UnifiedChart from '../components/UnifiedChart';
 import { useVaultStore } from '../store/useVaultStore';
 import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 
@@ -113,7 +113,16 @@ export default function HistoryPage({ ws, activePage }:P) {
                 <div className="sql-panel"><div className="panel-lbl">SQL</div><div className="code-block">{sel.generated_sql}</div></div>
               )}
               {sel.result_data && Array.isArray(sel.result_data) && sel.result_data.length>0 && (
-                <div className="chart-panel"><div className="panel-lbl">Chart</div><Chart data={sel.result_data} type={sel.chart_type||'bar'} /></div>
+                <div className="chart-panel">
+                  <div className="panel-lbl">Chart</div>
+                  <UnifiedChart
+                    data={sel.result_data}
+                    chartType={sel.chart_type||'bar'}
+                    xAxisKey={sel.x_axis_key}
+                    yAxisKey={sel.y_axis_key}
+                    title={sel.chart_title}
+                  />
+                </div>
               )}
               {sel.insights && Array.isArray(sel.insights) && sel.insights.length>0 && (
                 <div className="insights-panel"><div className="panel-lbl">🧠 Insights</div>{sel.insights.map((ins:string,i:number)=><div key={i} className="insight-row">{ins}</div>)}</div>

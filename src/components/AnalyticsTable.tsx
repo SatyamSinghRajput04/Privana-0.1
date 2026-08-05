@@ -37,20 +37,25 @@ export function AnalyticsTable({ rows, maxRows = 200 }: Props) {
       }));
   }, [rows]);
 
-  // Find maximum numeric values for inline spark-bars
-  const colMaxes = useMemo(() => {
-    const maxes: Record<string, number> = {};
+  // Find stats for inline spark-bars (handling negative values)
+  const colStats = useMemo(() => {
+    const stats: Record<string, { maxAbs: number; hasNegative: boolean }> = {};
     columns.forEach(col => {
       if (col.isNumeric) {
-        let maxVal = 0.0001;
+        let maxAbs = 0.0001;
+        let hasNegative = false;
         rows.forEach(r => {
           const v = Number(r[col.key]);
-          if (!isNaN(v) && v > maxVal) maxVal = v;
+          if (!isNaN(v)) {
+            const absV = Math.abs(v);
+            if (absV > maxAbs) maxAbs = absV;
+            if (v < 0) hasNegative = true;
+          }
         });
-        maxes[col.key] = maxVal;
+        stats[col.key] = { maxAbs, hasNegative };
       }
     });
-    return maxes;
+    return stats;
   }, [columns, rows]);
 
   const sorted = useMemo(() => {
@@ -135,14 +140,32 @@ export function AnalyticsTable({ rows, maxRows = 200 }: Props) {
                             : String(val ?? '-')}
                         </span>
                         {isNumeric && (() => {
-                          const max = colMaxes[col.key] || 1;
-                          const pct = Math.min(100, Math.max(0, (Number(val) / max) * 100));
+                          const stats = colStats[col.key];
+                          if (!stats) return null;
+                          const { maxAbs, hasNegative } = stats;
+                          const valNum = Number(val);
+                          const pct = Math.min(100, Math.max(0, (Math.abs(valNum) / maxAbs) * 100));
                           const indicatorColor = col.key.toLowerCase().includes('count') ? 'bg-pink-500' : 'bg-cyan-500';
-                          return (
-                            <div className="w-full h-1 bg-zinc-900/60 rounded-full overflow-hidden shrink-0 mt-0.5 opacity-80">
-                              <div className={`h-full ${indicatorColor}`} style={{ width: `${pct}%` }} />
-                            </div>
-                          );
+
+                          if (hasNegative) {
+                            const barWidth = pct * 0.5;
+                            const barLeft = valNum < 0 ? 50 - barWidth : 50;
+                            return (
+                              <div className="w-full h-1 bg-zinc-900/60 rounded-full overflow-hidden shrink-0 mt-0.5 opacity-80 relative">
+                                <div className="absolute left-1/2 top-0 bottom-0 w-[1px] bg-zinc-700/60 z-20" />
+                                <div 
+                                  className={`h-full ${indicatorColor} absolute`} 
+                                  style={{ left: `${barLeft}%`, width: `${barWidth}%` }} 
+                                />
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div className="w-full h-1 bg-zinc-900/60 rounded-full overflow-hidden shrink-0 mt-0.5 opacity-80 relative">
+                                <div className={`h-full ${indicatorColor}`} style={{ width: `${pct}%` }} />
+                              </div>
+                            );
+                          }
                         })()}
                       </div>
                     </td>

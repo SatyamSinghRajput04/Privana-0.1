@@ -87,31 +87,27 @@ export const SchemaIntelligence = {
    * Generates similar column suggestions for a missing term.
    */
   getSimilarColumns(missingTerm: string, profile: DatasetProfile): string[] {
-    if (!profile || !profile.columns) return [];
+    if (!profile || !profile.columns || profile.columns.length === 0) return [];
     const cleanTerm = missingTerm.toLowerCase().replace(/[^a-z0-9_]/g, '');
-    const suggestions: string[] = [];
 
-    for (const col of profile.columns) {
+    // Rank all dataset columns dynamically by relevance to the missing term
+    const scoredCols = profile.columns.map(col => {
       const colName = col.name;
       const cleanCol = colName.toLowerCase().replace(/[^a-z0-9_]/g, '');
-
-      // 1. Calculate edit distance
       const dist = getLevenshteinDistance(cleanTerm, cleanCol);
-      if (dist <= 6) {
-        suggestions.push(colName);
-        continue;
-      }
+      const hasOverlap = cleanCol.includes(cleanTerm) || cleanTerm.includes(cleanCol);
+      return { colName, dist, hasOverlap };
+    });
 
-      // 2. Common suffixes check (e.g. both end in _level or _label or _hours)
-      const suffixes = ['_level', '_label', '_hours', '_time', '_sleep'];
-      const matchingSuffix = suffixes.find(s => cleanTerm.endsWith(s.replace('_', '')) || cleanTerm.endsWith(s));
-      if (matchingSuffix && (cleanCol.endsWith(matchingSuffix.replace('_', '')) || cleanCol.endsWith(matchingSuffix))) {
-        suggestions.push(colName);
-        continue;
-      }
-    }
+    // Sort by overlap priority, then Levenshtein edit distance ascending
+    scoredCols.sort((a, b) => {
+      if (a.hasOverlap && !b.hasOverlap) return -1;
+      if (!a.hasOverlap && b.hasOverlap) return 1;
+      return a.dist - b.dist;
+    });
 
-    return Array.from(new Set(suggestions)).slice(0, 3);
+    const topSuggestions = scoredCols.map(s => s.colName);
+    return Array.from(new Set(topSuggestions)).slice(0, 4);
   },
 
   /**
@@ -157,9 +153,9 @@ export const SchemaIntelligence = {
   suggestQuestions(profile: DatasetProfile): string[] {
     if (!profile || !profile.columns || profile.columns.length === 0) {
       return [
-        'Show the distribution of depression_label',
-        'Which social media platform has the highest average anxiety_level?',
-        'Calculate Pearson correlation between sleep_hours and stress_level',
+        'Upload a dataset first, then ask about distributions, averages, or correlations.',
+        'Try: "Show the distribution of [column_name]"',
+        'Try: "What is the average [metric] by [category]?"',
       ];
     }
 
@@ -187,9 +183,14 @@ export const SchemaIntelligence = {
     }
 
     // 4. Feature importance suggestion
-    const depressionCol = columns.find(c => c.name.toLowerCase().includes('depression') || c.name.toLowerCase().includes('stress'));
-    if (depressionCol) {
-      suggestions.push(`What features best predict ${depressionCol.name}?`);
+    const likelyTarget = columns.find(c => {
+      const name = c.name.toLowerCase();
+      return name.endsWith('_level') || name.endsWith('_score') || name.endsWith('_label') || name.endsWith('_index') || name === 'target' || name === 'outcome';
+    });
+    const likelyTargetName = likelyTarget ? likelyTarget.name : (numericCols.length > 0 ? numericCols[numericCols.length - 1] : null);
+
+    if (likelyTargetName) {
+      suggestions.push(`What features best predict ${likelyTargetName}?`);
     } else if (numericCols.length > 0) {
       suggestions.push(`What features best predict ${numericCols[0]}?`);
     }
@@ -201,10 +202,11 @@ export const SchemaIntelligence = {
       suggestions.push(`Top 5 ${catCol}s by average ${numCol}`);
     }
 
-    // Fallback if list is too short
+    // Fallback if list is too short — use generic suggestions
     while (suggestions.length < 3) {
-      suggestions.push('Show the distribution of depression_label');
-      suggestions.push('Which social media platform has the highest average anxiety_level?');
+      if (suggestions.length === 0) suggestions.push('Try asking about a distribution of any column');
+      if (suggestions.length === 1) suggestions.push('Try asking about averages grouped by a category');
+      if (suggestions.length === 2) suggestions.push('Try asking about correlations between two numeric columns');
     }
 
     return suggestions.slice(0, 4); // return top 4 suggestions

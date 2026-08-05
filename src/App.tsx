@@ -10,6 +10,7 @@ import SavedPage from './pages/SavedPage';
 import SettingsPage from './pages/SettingsPage';
 import LandingPage from './pages/LandingPage';
 import { useVaultStore } from './store/useVaultStore';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export type Page = 'home' | 'analyze' | 'datasets' | 'history' | 'network' | 'saved' | 'settings';
 export interface Workspace { 
@@ -60,6 +61,7 @@ export default function App() {
   const shared = { ws, workspaces, setWS: () => {}, setWs, setPage, onMenu: () => setSideOpen(o => !o) };
 
   return (
+    <ErrorBoundary fallbackTitle="Privana Application Error">
     <div className="app">
       <Sidebar 
         page={page} 
@@ -85,10 +87,14 @@ export default function App() {
             display: page === 'analyze' ? 'block' : 'none', 
             height: page === 'analyze' ? '100%' : 'auto' 
           }}>
-            <AnalyzePage {...shared} />
+            <ErrorBoundary fallbackTitle="Analyze Page Error">
+              <AnalyzePage {...shared} />
+            </ErrorBoundary>
           </div>
           <div style={{ display: page === 'datasets' ? 'block' : 'none' }}>
-            <DatasetsPage {...shared} />
+            <ErrorBoundary fallbackTitle="Datasets Page Error">
+              <DatasetsPage {...shared} />
+            </ErrorBoundary>
           </div>
           <div style={{ display: page === 'history' ? 'block' : 'none' }}>
             <HistoryPage {...shared} activePage={page} />
@@ -105,5 +111,6 @@ export default function App() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

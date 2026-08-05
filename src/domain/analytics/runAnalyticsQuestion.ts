@@ -11,6 +11,9 @@ import { SchemaIntelligence } from './schemaIntelligence';
 import { SemanticResolver } from './semanticResolver';
 import { AnalyticsResult, AnalysisPlan, ExecutorResult, ChartSpec, ClarificationChoice, SUPPORTED_INTENTS } from './types';
 
+import { mapToVisualContract } from './resultToVisualContext';
+import { useCockpitStore } from '../../store/useCockpitStore';
+
 // Executors
 import { SummaryExecutor } from './executors/summary';
 import { DistributionExecutor } from './executors/distribution';
@@ -102,7 +105,8 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     const qLower = question.toLowerCase();
     const advancedKeywords = [
       'logistic regression', 'clustering', 'cluster', 'anomaly detection', 'anomalies',
-      'heatmap', 'correlation matrix', 'probability prediction', 'actionable insights'
+      'heatmap', 'correlation matrix', 'probability prediction', 'actionable insights',
+      'trend', 'over time', 'time series', 'time-series', 'monthly', 'weekly', 'daily', 'yearly'
     ];
     const matchedKeyword = advancedKeywords.find(kw => qLower.includes(kw));
     if (matchedKeyword) {
@@ -129,7 +133,8 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       limit: resolvedSlots.limit,
       confidence: plannedIntent.confidence,
       source: 'pattern',
-    };
+      _originalQuestion: question,
+    } as AnalysisPlan & { _originalQuestion: string };
 
     // STEP 3 — Confidence Gate & Validation
     if (!SUPPORTED_INTENTS.includes(plan.intent)) {
@@ -399,6 +404,11 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
         const diff = sorted[0].mean - sorted[sorted.length - 1].mean;
         narrative += `**${sorted[0].group_label}** averages **${sorted[0].mean.toFixed(2)}** vs **${sorted[sorted.length - 1].group_label}** at **${sorted[sorted.length - 1].mean.toFixed(2)}** (difference of **${diff.toFixed(2)}**).`;
       }
+    } else if (plan.intent === 'summary') {
+      chartSpec.chartType = 'none';
+      const metricText = plan.metric ? `**${plan.metric}**` : 'total records';
+      const totalCount = (execResult.metadata?.rowCount || rows.length).toLocaleString();
+      narrative = `Analyzed dataset **${tableName}**. Total count for ${metricText} is **${totalCount}**.`;
     } else {
       narrative = `Successfully compiled descriptive statistics overview.`;
     }
@@ -411,19 +421,15 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       reasons.push(METADATA_BYPASS_WARNING);
     }
 
-    if (reasons.length > 0) {
-      return {
-        status: 'partial',
-        plan,
-        data: execResult,
-        chart: chartSpec,
-        narrative,
-        reasons,
-        provenance: buildProvenance(),
-      };
-    }
-
-    return {
+    const finalResult: AnalyticsResult = reasons.length > 0 ? {
+      status: 'partial',
+      plan,
+      data: execResult,
+      chart: chartSpec,
+      narrative,
+      reasons,
+      provenance: buildProvenance(),
+    } : {
       status: 'computed',
       plan,
       data: execResult,
@@ -431,6 +437,17 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       narrative,
       provenance: buildProvenance(),
     };
+
+    try {
+      const visualContract = mapToVisualContract(finalResult);
+      if (visualContract) {
+        useCockpitStore.getState().commitResult(useCockpitStore.getState().currentRunId, visualContract);
+      }
+    } catch (commitErr) {
+      console.warn('Failed to commit visual contract to cockpit store:', commitErr);
+    }
+
+    return finalResult;
 
   } catch (err: any) {
     return {

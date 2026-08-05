@@ -47,13 +47,16 @@ export const CorrelationExecutor = {
     let pVal = 1.0;
     const warnings: string[] = [];
 
+    let binaryMapping: any = null;
+
     if (isMetricNumeric && isTargetNumeric) {
       // Both numeric -> Pearson/Spearman
       const xs = metricVals.map(Number);
       const ys = targetVals.map(Number);
       
-      const q = plan.planId.toLowerCase();
-      const useSpearman = q.includes('spearman');
+      // Check the original question text for Spearman request (planId is auto-generated and never contains 'spearman')
+      const originalQ = ((plan as any)._originalQuestion || '').toLowerCase();
+      const useSpearman = originalQ.includes('spearman') || (plan as any).source === 'spearman';
       
       if (useSpearman) {
         rVal = getSpearmanCorrelation(xs, ys);
@@ -73,16 +76,16 @@ export const CorrelationExecutor = {
       const uniqueCats = Array.from(new Set(catVals));
       if (uniqueCats.length === 2) {
         // Binary vs Numeric -> Point-Biserial
-        const mapping = resolveBinaryMapping(uniqueCats);
-        const pb = computePointBiserial(numVals, catVals, mapping);
+        binaryMapping = resolveBinaryMapping(uniqueCats);
+        const pb = computePointBiserial(numVals, catVals, binaryMapping);
         rVal = pb.correlation;
         method = 'Point-Biserial';
         
         const sig = testCorrelationSignificance(rVal, cleanRows.length);
         pVal = sig.p;
 
-        if (mapping.isAmbiguous) {
-          warnings.push(mapping.mappingNote || 'Point-biserial mapping is ambiguous.');
+        if (binaryMapping.isAmbiguous) {
+          warnings.push(binaryMapping.mappingNote || 'Point-biserial mapping is ambiguous.');
         }
       } else {
         return {
@@ -103,10 +106,19 @@ export const CorrelationExecutor = {
       };
     }
 
-    const points = cleanRows.map(r => ({
-      x: Number(r[metric]),
-      y: Number(r[target])
-    }));
+    const points = cleanRows.map(r => {
+      let x = Number(r[metric]);
+      let y = Number(r[target]);
+      if (method === 'Point-Biserial' && binaryMapping) {
+        if (!isMetricNumeric) {
+          x = (r[metric] === binaryMapping.posValue || String(r[metric]) === String(binaryMapping.posValue)) ? 1 : 0;
+        }
+        if (!isTargetNumeric) {
+          y = (r[target] === binaryMapping.posValue || String(r[target]) === String(binaryMapping.posValue)) ? 1 : 0;
+        }
+      }
+      return { x, y };
+    });
 
     return {
       status: cleanRows.length < 5 ? 'partial_small_n' : 'success',

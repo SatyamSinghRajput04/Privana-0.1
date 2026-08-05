@@ -139,17 +139,41 @@ export interface StructuredQuery {
   limit?: number;
 }
 
+export interface AxisSpec {
+  key: string;
+  label: string;
+  vizType: 'numeric' | 'category' | 'date';
+  format?: 'number' | 'currency' | 'percent';
+}
+
+export interface SeriesSpec {
+  key: string;
+  label: string;
+  color?: string;
+}
+
 export type GroupedAveragesPayload = { category: string; value: number }[];
+export type ComparisonSummaryPayload = { category: string; value: number }[];
+export type RankingSummaryPayload = { category: string; value: number }[];
+export type FeatureImportancePayload = { feature: string; association: number; method?: string }[];
 export type CorrelationPayload = { x: number; y: number }[];
 export type TableRowsPayload = any[];
 export type DistributionPayload = { binRange: string; count: number }[];
 
 export type VisualContract = (
-  | { kind: 'groupedAverages';   schemaVersion: 1; data: GroupedAveragesPayload; xAxisLabel?: string; yAxisLabel?: string }
-  | { kind: 'correlationSummary';schemaVersion: 1; data: CorrelationPayload; rValue: number; pValue: number; trendSlope: number; xAxisLabel?: string; yAxisLabel?: string }
-  | { kind: 'tableRows';         schemaVersion: 1; data: TableRowsPayload; columns: string[] }
-  | { kind: 'distributionBins';  schemaVersion: 1; data: DistributionPayload; metricName: string; xAxisLabel?: string; yAxisLabel?: string }
-) & { notes?: string; lastComputedAt?: number };
+  | { kind: 'bar';              schemaVersion: 1; xAxis: AxisSpec; yAxis: AxisSpec; series: SeriesSpec[]; data: ReadonlyArray<Record<string, any>>; xAxisLabel?: string; yAxisLabel?: string }
+  | { kind: 'line';             schemaVersion: 1; xAxis: AxisSpec; yAxis: AxisSpec; series: SeriesSpec[]; data: ReadonlyArray<Record<string, any>>; xAxisLabel?: string; yAxisLabel?: string }
+  | { kind: 'scatter';          schemaVersion: 1; xAxis: AxisSpec; yAxis: AxisSpec; zAxis?: AxisSpec; data: ReadonlyArray<Record<string, number>>; rValue?: number; pValue?: number; trendSlope?: number; xAxisLabel?: string; yAxisLabel?: string }
+  | { kind: 'pie';              schemaVersion: 1; labelKey: string; valueKey: string; labelDisplay: string; data: ReadonlyArray<Record<string, any>>; xAxisLabel?: string; yAxisLabel?: string }
+  | { kind: 'groupedAverages';  schemaVersion: 1; data: GroupedAveragesPayload; xAxisLabel?: string; yAxisLabel?: string; xAxis?: AxisSpec; yAxis?: AxisSpec; series?: SeriesSpec[] }
+  | { kind: 'comparisonSummary';schemaVersion: 1; data: ComparisonSummaryPayload; xAxisLabel?: string; yAxisLabel?: string; xAxis?: AxisSpec; yAxis?: AxisSpec; series?: SeriesSpec[] }
+  | { kind: 'rankingSummary';   schemaVersion: 1; data: RankingSummaryPayload; xAxisLabel?: string; yAxisLabel?: string; xAxis?: AxisSpec; yAxis?: AxisSpec; series?: SeriesSpec[] }
+  | { kind: 'featureImportance';schemaVersion: 1; data: FeatureImportancePayload; xAxisLabel?: string; yAxisLabel?: string; xAxis?: AxisSpec; yAxis?: AxisSpec; series?: SeriesSpec[] }
+  | { kind: 'correlationSummary';schemaVersion: 1; data: CorrelationPayload; rValue: number; pValue: number; trendSlope: number; sampleSize?: number; method?: string; xAxisLabel?: string; yAxisLabel?: string; xAxis?: AxisSpec; yAxis?: AxisSpec }
+  | { kind: 'tableRows';         schemaVersion: 1; data: TableRowsPayload; columns: string[]; rowCount?: number }
+  | { kind: 'distributionBins';  schemaVersion: 1; data: DistributionPayload; metricName: string; xAxisLabel?: string; yAxisLabel?: string; xAxis?: AxisSpec; yAxis?: AxisSpec; series?: SeriesSpec[] }
+  | { kind: 'empty';            schemaVersion: 1; reason: string; data?: any[] }
+) & { notes?: string; lastComputedAt?: number; data?: any[] };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SPEC V2.0 WORKSPACE ENGINE: WORKSPACE BLUEPRINT & CARD SPECIFICATION
@@ -159,7 +183,7 @@ export type CardSpec =
   | { kind: 'correlation'; xColumn: string; yColumn: string; }
   | { kind: 'distribution'; metricColumn: string; binCount: number; }
   | { kind: 'ranking'; metricColumn: string; categoryColumn: string; limit: number; sort: 'asc' | 'desc'; }
-  | { kind: 'genderSummary'; }
+  | { kind: 'segmentSummary'; segmentColumn: string; metricColumns: string[]; }
   | { type: 'kpi'; value: string | number; sub?: string; }
   | { type: 'table'; rows: any[]; }
   | { type: 'narrative'; text: string; provenance?: Provenance; };

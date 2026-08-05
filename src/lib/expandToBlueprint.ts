@@ -54,6 +54,9 @@ function strengthLabel(r: number): string {
   return 'Weak Correlation';
 }
 
+const getVal = (r: any): number => Number(r.average_value ?? r.mean ?? r.metric_value ?? r.association ?? 0);
+const getLabel = (r: any): string => String(r.category_label ?? r.group_label ?? r.rank_label ?? r.feature ?? 'N/A');
+
 function extractPrimaryKPI(
   intent: AnalysisIntent,
   rows: any[],
@@ -65,14 +68,16 @@ function extractPrimaryKPI(
 
   switch (intent) {
     case 'grouped_average':
-    case 'ranking': {
+    case 'ranking':
+    case 'comparison': {
       // Find row with max value
-      const sorted = [...rows].sort((a, b) => b.average_value - a.average_value);
+      const sorted = [...rows].sort((a, b) => getVal(b) - getVal(a));
       const top = sorted[0];
+      const labelPrefix = intent === 'comparison' ? 'Highest Mean' : (intent === 'ranking' ? 'Top Ranked' : 'Highest Average');
       return {
-        label: `Highest Average ${formatFieldName(metric)}`,
-        value: Number(top.average_value).toFixed(2),
-        sub:   String(top.category_label || top.group_label || 'N/A'),
+        label: `${labelPrefix} ${formatFieldName(metric)}`,
+        value: getVal(top).toFixed(2),
+        sub:   getLabel(top),
       };
     }
     case 'correlation': {
@@ -102,14 +107,16 @@ function extractSecondaryKPI(intent: AnalysisIntent, rows: any[], plan: Analysis
 
   switch (intent) {
     case 'grouped_average':
-    case 'ranking': {
-      const sorted = [...rows].sort((a, b) => a.average_value - b.average_value);
+    case 'ranking':
+    case 'comparison': {
+      const sorted = [...rows].sort((a, b) => getVal(a) - getVal(b));
       const bottom = sorted[0];
       const top    = sorted[sorted.length - 1];
-      const gap    = (top.average_value - bottom.average_value).toFixed(2);
+      const gap    = (getVal(top) - getVal(bottom)).toFixed(2);
+      const labelPrefix = intent === 'comparison' ? 'Lowest Mean' : (intent === 'ranking' ? 'Bottom Ranked' : 'Lowest Average');
       return {
-        label: `Lowest Average ${formatFieldName(plan.metric || '')}`,
-        value: Number(bottom.average_value).toFixed(2),
+        label: `${labelPrefix} ${formatFieldName(plan.metric || '')}`,
+        value: getVal(bottom).toFixed(2),
         sub:   `Gap of ${gap} from highest`,
       };
     }

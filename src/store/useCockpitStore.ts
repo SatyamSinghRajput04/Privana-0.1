@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { PrivacyFirewall } from '../infrastructure/firewall/firewall';
+import { VisualContract } from '../domain/analytics/types';
+
+export type { VisualContract };
 
 export interface FilterClause {
   column: string;
@@ -7,12 +10,6 @@ export interface FilterClause {
   value: any; // Single value, or array for 'in' / 'between'
   isSuspended?: boolean; // Suspended filter badge rule
 }
-
-export type VisualContract =
-  | { kind: 'groupedAverages';   schemaVersion: 1; data: any[]; xAxisLabel?: string; yAxisLabel?: string }
-  | { kind: 'correlationSummary';schemaVersion: 1; data: any[]; rValue: number; pValue: number; trendSlope: number; xAxisLabel?: string; yAxisLabel?: string }
-  | { kind: 'tableRows';         schemaVersion: 1; data: any[]; columns: string[] }
-  | { kind: 'distributionBins';  schemaVersion: 1; data: any[]; metricName: string; xAxisLabel?: string; yAxisLabel?: string };
 
 export interface TelemetryEvent {
   timestamp: number;
@@ -133,9 +130,10 @@ export const useCockpitStore = create<CockpitState>((set, get) => ({
     // Latest-Wins Ordering §1.3
     if (runId === currentRunId) {
       // Immutability of Committed State §1.5
+      const rawData = (visualData as any).data;
       const frozenVisual = Object.freeze({
         ...visualData,
-        data: Array.isArray(visualData.data) ? Object.freeze(visualData.data.map(d => Object.freeze({ ...d }))) : visualData.data
+        data: Array.isArray(rawData) ? Object.freeze(rawData.map((d: any) => Object.freeze({ ...d }))) : rawData
       });
       set({ 
         committedVisual: frozenVisual as any, 

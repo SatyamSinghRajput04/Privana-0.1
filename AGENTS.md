@@ -36,3 +36,27 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 2. Use `detect_changes` for code review.
 3. Use `get_affected_flows` to understand impact.
 4. Use `query_graph` pattern="tests_for" to check coverage.
+
+---
+
+### 🛡️ Analytics Unification & Tabular-Agnostic Rules
+
+1. **Unified Pipeline Enforcement**:
+   - Every analytical query (whether entered via the main search bar, preset suggestions, or floating chat assistants) MUST route through the single unified execution domain layer (`runAnalyticsQuestion()`). 
+   - Never allow chat components or side panels to maintain duplicate statistical calculation loops or legacy SQL executors.
+
+2. **Tabular-Agnostic Card Specs**:
+   - Layout blueprints and schema profiles must be derived dynamically using column types (numeric vs. categorical) and naming heuristics (e.g. matching suffixes like `_level`, `_index`, `_score`).
+   - Never hardcode dataset-specific column names (`gender`, `sleep_hours`, `anxiety_level`) in card specifications, SQL generators, or visual contract mappers.
+
+3. **Compiler Invariant Verification**:
+   - Always run an explicit execution test (using a scratch runner or test suite) against files modified during refactoring. 
+   - Do not rely solely on incremental `tsc` checks as caching can mask dangling braces or import syntax errors in unreferenced paths.
+
+4. **Single Source of Truth**:
+   - Every analytical visualization, KPI, table, AI explanation, workspace card, or exported report must originate from the same immutable `AnalyticsResult` snapshot.
+   - No component may independently recompute, reinterpret, or fabricate analytical values after execution.
+
+5. **Immutable Analytical Snapshot**:
+   - Once an `AnalyticsResult` has been committed, it becomes immutable.
+   - Filtering, sorting, visualization, AI narratives, and exports must consume the snapshot, never mutate it.

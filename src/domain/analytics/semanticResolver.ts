@@ -122,8 +122,16 @@ export const SemanticResolver = {
     const words = cleanQ.split(/\s+/).filter(w => w.length > 0);
     const missing: string[] = [];
 
+    const STOP_WORDS = new Set([
+      'how', 'many', 'total', 'what', 'show', 'are', 'there', 'is', 'was', 'were',
+      'the', 'a', 'an', 'of', 'by', 'in', 'for', 'and', 'to', 'with', 'on', 'all', 'average', 'count'
+    ]);
+
     // Helper to see if a term matches something but is gated
     const checkTerm = (term: string) => {
+      const termWords = term.toLowerCase().split(/[\s_]+/);
+      if (termWords.some(w => STOP_WORDS.has(w))) return;
+
       const rawMatch = ColumnResolver.resolve(term, profile);
       if (rawMatch && rawMatch.strategy === 'fuzzy') {
         if (resolvedCols.has(rawMatch.columnName.toLowerCase())) {

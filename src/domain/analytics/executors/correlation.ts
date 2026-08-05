@@ -12,6 +12,29 @@ import {
   testCorrelationSignificance 
 } from '../../safeCompute/relationshipRanker';
 
+// Maximum scatter overlay points for visualization. Statistics (r, p-value)
+// are always computed on 100% of rows — only the SVG scatter gets capped.
+const MAX_SCATTER_POINTS = 2_000;
+
+/** Project a single row to {x, y}, honoring Point-Biserial binary mapping. */
+function projectPoint(
+  r: any, metric: string, target: string,
+  method: string, binaryMapping: any,
+  isMetricNumeric: boolean, isTargetNumeric: boolean
+): { x: number; y: number } {
+  let x = Number(r[metric]);
+  let y = Number(r[target]);
+  if (method === 'Point-Biserial' && binaryMapping) {
+    if (!isMetricNumeric) {
+      x = (r[metric] === binaryMapping.posValue || String(r[metric]) === String(binaryMapping.posValue)) ? 1 : 0;
+    }
+    if (!isTargetNumeric) {
+      y = (r[target] === binaryMapping.posValue || String(r[target]) === String(binaryMapping.posValue)) ? 1 : 0;
+    }
+  }
+  return { x, y };
+}
+
 export const CorrelationExecutor = {
   /**
    * Computes Pearson, Spearman, or Point-Biserial correlation between plan.metric and plan.target.
@@ -106,19 +129,21 @@ export const CorrelationExecutor = {
       };
     }
 
-    const points = cleanRows.map(r => {
-      let x = Number(r[metric]);
-      let y = Number(r[target]);
-      if (method === 'Point-Biserial' && binaryMapping) {
-        if (!isMetricNumeric) {
-          x = (r[metric] === binaryMapping.posValue || String(r[metric]) === String(binaryMapping.posValue)) ? 1 : 0;
-        }
-        if (!isTargetNumeric) {
-          y = (r[target] === binaryMapping.posValue || String(r[target]) === String(binaryMapping.posValue)) ? 1 : 0;
-        }
+    // ── Scatter overlay (downsampled for DOM safety) ─────────────────────
+    // Statistics above used ALL cleanRows. Visual scatter is capped at
+    // MAX_SCATTER_POINTS via reservoir sampling to preserve uniform coverage.
+    let points: { x: number; y: number }[];
+    if (cleanRows.length <= MAX_SCATTER_POINTS) {
+      points = cleanRows.map(r => projectPoint(r, metric, target, method, binaryMapping, isMetricNumeric, isTargetNumeric));
+    } else {
+      // Reservoir sampling: first N, then probabilistic replacement
+      const reservoir = cleanRows.slice(0, MAX_SCATTER_POINTS);
+      for (let i = MAX_SCATTER_POINTS; i < cleanRows.length; i++) {
+        const j = Math.floor(Math.random() * (i + 1));
+        if (j < MAX_SCATTER_POINTS) reservoir[j] = cleanRows[i];
       }
-      return { x, y };
-    });
+      points = reservoir.map(r => projectPoint(r, metric, target, method, binaryMapping, isMetricNumeric, isTargetNumeric));
+    }
 
     return {
       status: cleanRows.length < 5 ? 'partial_small_n' : 'success',

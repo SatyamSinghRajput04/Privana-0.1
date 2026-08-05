@@ -28,6 +28,9 @@ interface CockpitState {
   
   // Immutably committed VisualData
   committedVisual: VisualContract | null;
+  // planId the committedVisual belongs to. Without this, every ResultView on
+  // screen rendered the same global contract regardless of its own result.
+  committedPlanId: string | null;
   visualError: { runId: number; kind: string; message: string } | null;
 
   // ── Compute Run Governance ────────────────────────────────────────────────
@@ -54,7 +57,7 @@ interface CockpitState {
   
   // Run life cycle (Stale-Result Discards)
   startNewRun: () => number;
-  commitResult: (runId: number, visualData: VisualContract) => void;
+  commitResult: (runId: number, visualData: VisualContract, planId?: string) => void;
   commitError: (runId: number, kind: string, message: string) => void;
   setComputeInFlight: (inFlight: boolean) => void;
   setPerformanceBadge: (badge: 'normal' | 'degraded' | null) => void;
@@ -92,6 +95,7 @@ export const useCockpitStore = create<CockpitState>((set, get) => ({
   compiledQuery: null,
   filterContext: [],
   committedVisual: null,
+  committedPlanId: null,
   visualError: null,
 
   currentRunId: 0,
@@ -125,7 +129,7 @@ export const useCockpitStore = create<CockpitState>((set, get) => ({
     return nextRunId;
   },
 
-  commitResult: (runId, visualData) => {
+  commitResult: (runId, visualData, planId) => {
     const { currentRunId } = get();
     // Latest-Wins Ordering §1.3
     if (runId === currentRunId) {
@@ -137,6 +141,7 @@ export const useCockpitStore = create<CockpitState>((set, get) => ({
       });
       set({ 
         committedVisual: frozenVisual as any, 
+        committedPlanId: planId ?? null,
         isComputeInFlight: false, 
         visualError: null 
       });
@@ -151,6 +156,7 @@ export const useCockpitStore = create<CockpitState>((set, get) => ({
     if (runId === currentRunId) {
       set({ 
         committedVisual: null, 
+        committedPlanId: null,
         visualError: { runId, kind, message }, 
         isComputeInFlight: false 
       });
@@ -166,6 +172,7 @@ export const useCockpitStore = create<CockpitState>((set, get) => ({
     compiledQuery: null,
     filterContext: [],
     committedVisual: null,
+    committedPlanId: null,
     visualError: null,
     currentRunId: 0,
     isComputeInFlight: false,

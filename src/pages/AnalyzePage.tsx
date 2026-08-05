@@ -254,19 +254,20 @@ import CockpitFilters from '../components/analytics/CockpitFilters';;
 
 export default function AnalyzePage({ setPage, onMenu }: P) {
   const { ws, datasets, selectedDataset, setSelectedDataset, saveBookmark, saveQuery } = useVaultStore();
-  const { 
-    workspacePipelineEnabled, 
-    setWorkspacePipelineEnabled,
-    activeWorkspace, 
-    activeSheetId, 
-    setActiveSheetId, 
-    setWorkspaceBlueprint,
-    setWorkspaceInFlight,
-    bypassedDatasets,
-    bypassDataset,
-    setContextualCard,
-    clearContextualCard,
-  } = useWorkspaceStore();
+
+  // ── Atomic selectors: each returns a primitive / stable ref so that
+  // unrelated store writes don't re-render this entire page + all charts.
+  const workspacePipelineEnabled = useWorkspaceStore(s => s.workspacePipelineEnabled);
+  const setWorkspacePipelineEnabled = useWorkspaceStore(s => s.setWorkspacePipelineEnabled);
+  const activeWorkspace = useWorkspaceStore(s => s.activeWorkspace);
+  const activeSheetId = useWorkspaceStore(s => s.activeSheetId);
+  const setActiveSheetId = useWorkspaceStore(s => s.setActiveSheetId);
+  const setWorkspaceBlueprint = useWorkspaceStore(s => s.setWorkspaceBlueprint);
+  const setWorkspaceInFlight = useWorkspaceStore(s => s.setWorkspaceInFlight);
+  const bypassedDatasets = useWorkspaceStore(s => s.bypassedDatasets);
+  const bypassDataset = useWorkspaceStore(s => s.bypassDataset);
+  const setContextualCard = useWorkspaceStore(s => s.setContextualCard);
+  const clearContextualCard = useWorkspaceStore(s => s.clearContextualCard);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   const [activeTab, setActiveTab] = useState<'report' | 'data' | 'model'>('report');
@@ -1785,8 +1786,22 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
   }, [selectedDataset, genderFilter, platformFilter, ageRange, isMentalHealthSchema, tableLoadedState]);
 
   // Trigger workspace tab execution when active tab or filters change
+  // Dedup guard: skip re-execution when the dep array fires but the actual
+  // payload hasn't changed (e.g., Zustand object-identity false positives).
+  const lastRunSignatureRef = React.useRef<string>('');
   useEffect(() => {
     if (workspacePipelineEnabled && selectedDataset && activeWorkspace && activeSheetId) {
+      const sig = JSON.stringify({
+        ds: selectedDataset.name,
+        sheet: activeSheetId,
+        ws: activeWorkspace.datasetId,
+        genderFilter,
+        platformFilter,
+        ageRange,
+      });
+      if (sig === lastRunSignatureRef.current) return; // identical payload → skip
+      lastRunSignatureRef.current = sig;
+
       const runId = useCockpitStore.getState().startNewRun();
       const cockpitFilters = compileCockpitFilters();
       
@@ -1796,13 +1811,13 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
       });
     }
   }, [
-    selectedDataset,
+    selectedDataset?.name,
     genderFilter,
     platformFilter,
     ageRange,
     activeSheetId,
     workspacePipelineEnabled,
-    activeWorkspace
+    activeWorkspace?.datasetId
   ]);
 
   // Filter lists by search query

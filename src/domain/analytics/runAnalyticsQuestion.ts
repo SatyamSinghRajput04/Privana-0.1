@@ -441,7 +441,7 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     try {
       const visualContract = mapToVisualContract(finalResult);
       if (visualContract) {
-        useCockpitStore.getState().commitResult(useCockpitStore.getState().currentRunId, visualContract);
+        useCockpitStore.getState().commitResult(useCockpitStore.getState().currentRunId, visualContract, plan.planId);
       }
     } catch (commitErr) {
       console.warn('Failed to commit visual contract to cockpit store:', commitErr);

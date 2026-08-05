@@ -427,7 +427,8 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     lastRunDurationMs, 
     telemetryLogs, 
     performanceBadge,
-    committedVisual
+    committedVisual,
+    committedPlanId
   } = useCockpitStore();
 
   const {
@@ -1052,7 +1053,12 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   // Fallback to legacy map() if not committed (e.g. legacy query paths)
   // ─────────────────────────────────────────────────────────────────────────────
   const layout = React.useMemo(() => {
-    if (committedVisual) {
+    // Ownership guard: only consume the global committed visual if it belongs
+    // to this panel's planId. Without this, every panel renders the same chart.
+    const myPlanId = result?.plan?.planId ?? null;
+    const ownsCommitted = committedVisual && committedPlanId && myPlanId === committedPlanId;
+
+    if (ownsCommitted) {
       const kind = committedVisual.kind;
       // Map visual contract kind to standard UI VisualLayout representation
       const chartType = (kind === 'groupedAverages' || kind === 'comparisonSummary' || kind === 'rankingSummary' || kind === 'featureImportance') ? 'bar'
@@ -1133,7 +1139,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     }
     
     return ResultToVisualContext.map(result);
-  }, [committedVisual, result]);
+  }, [committedVisual, committedPlanId, result]);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // EARLY RETURN: workspace canvas branch (must come AFTER all hooks above)

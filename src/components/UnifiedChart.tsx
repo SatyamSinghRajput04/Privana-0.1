@@ -8,6 +8,10 @@ import { VisualContract } from '../domain/analytics/types';
 import { verifyContract } from '../domain/analytics/verifyContract';
 import { formatFieldName } from '../domain/analytics/schemaLookup';
 
+// Hard ceiling for scatter SVG elements. Even if an upstream executor
+// skips downsampling, we never push more than this many <circle> nodes.
+const MAX_RENDER_POINTS = 2_000;
+
 const PALETTE = [
   '#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444',
   '#06b6d4', '#f97316', '#ec4899', '#84cc16', '#6366f1'
@@ -218,7 +222,8 @@ export default function UnifiedChart({
     const yKey = (contract as any).yAxis?.key || 'y';
     const xLabel = (contract as any).xAxis?.label || contract.xAxisLabel || xKey;
     const yLabel = (contract as any).yAxis?.label || contract.yAxisLabel || yKey;
-    const scatterData = (contract.data || []) as any[];
+    const raw = (contract.data || []) as any[];
+    const scatterData = raw.length > MAX_RENDER_POINTS ? raw.slice(0, MAX_RENDER_POINTS) : raw;
 
     return (
       <div style={{ width: '100%', height }}>

@@ -33,12 +33,30 @@ function q(identifier: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 export function registerTable(tableName: string, data: any[]): void {
   const name = getSqlTableName(tableName);
+
+  // Guard: AlaSQL identifiers must start with a letter/underscore and contain
+  // only word characters. Filenames like ".csv" or "2024.csv" produce empty or
+  // digit-leading identifiers that crash CREATE TABLE.
+  if (!name || !/^[A-Za-z_]\w*$/.test(name)) {
+    throw new Error(
+      `registerTable: sanitized name "${name}" (from "${tableName}") is not a valid SQL identifier.`
+    );
+  }
+
   // Must CREATE TABLE first so AlaSQL's query engine recognizes it.
   // Direct assignment to alasql.tables works for data storage,
   // but CREATE TABLE ensures the parser can find it.
   try { alasql('DROP TABLE IF EXISTS ' + q(name)); } catch { /* ignore */ }
   try { alasql('CREATE TABLE ' + q(name)); } catch { /* ignore */ }
-  (alasql.tables as any)[name].data = data;
+
+  // Null guard: if CREATE TABLE failed silently, the table slot won't exist.
+  const tableSlot = (alasql.tables as any)[name];
+  if (!tableSlot) {
+    throw new Error(
+      `registerTable: AlaSQL table slot for "${name}" does not exist after CREATE TABLE.`
+    );
+  }
+  tableSlot.data = data;
 }
 
 

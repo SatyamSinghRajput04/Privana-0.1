@@ -88,7 +88,7 @@ export default function App() {
             height: page === 'analyze' ? '100%' : 'auto' 
           }}>
             <ErrorBoundary fallbackTitle="Analyze Page Error">
-              <AnalyzePage {...shared} />
+              <AnalyzePage {...shared} page={page} />
             </ErrorBoundary>
           </div>
           <div style={{ display: page === 'datasets' ? 'block' : 'none' }}>

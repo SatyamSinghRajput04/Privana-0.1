@@ -240,6 +240,7 @@ const MarkdownRenderer = ({ text, style }: { text: string; style?: React.CSSProp
 
 interface P { 
   setPage: (p: Page) => void;
+  page?: string;
   onMenu?: () => void;
 }
 
@@ -252,7 +253,7 @@ import WorkspaceTabs from '../components/analytics/WorkspaceTabs';
 import DatasetProfilePanel from '../components/analytics/DatasetProfilePanel';
 import CockpitFilters from '../components/analytics/CockpitFilters';;
 
-export default function AnalyzePage({ setPage, onMenu }: P) {
+export default function AnalyzePage({ setPage, page, onMenu }: P) {
   const { ws, datasets, selectedDataset, setSelectedDataset, saveBookmark, saveQuery } = useVaultStore();
 
   // ── Atomic selectors: each returns a primitive / stable ref so that
@@ -1432,6 +1433,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
 
   // Load table data from IndexedDB cache if not currently in AlaSQL memory
   useEffect(() => {
+    // Skip heavy table loading when page is hidden (always-mounted via CSS)
+    if (page !== 'analyze') return;
     if (!selectedDataset) {
       setTableLoadedState(null);
       return;
@@ -1473,10 +1476,12 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     return () => {
       active = false;
     };
-  }, [selectedDataset]);
+  }, [selectedDataset, page]);
 
   // Sync / calculate everything when dataset changes or filters update
   useEffect(() => {
+    // Skip heavy stats computation when page is hidden
+    if (page !== 'analyze') return;
     if (!selectedDataset) return;
     const tableName = selectedDataset.name;
 
@@ -1783,13 +1788,15 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     } catch (e) {
       console.error('Calculation failure:', e);
     }
-  }, [selectedDataset, genderFilter, platformFilter, ageRange, isMentalHealthSchema, tableLoadedState]);
+  }, [selectedDataset, genderFilter, platformFilter, ageRange, isMentalHealthSchema, tableLoadedState, page]);
 
   // Trigger workspace tab execution when active tab or filters change
   // Dedup guard: skip re-execution when the dep array fires but the actual
   // payload hasn't changed (e.g., Zustand object-identity false positives).
   const lastRunSignatureRef = useRef<string>('');
   useEffect(() => {
+    // Skip workspace execution when page is hidden
+    if (page !== 'analyze') return;
     if (workspacePipelineEnabled && selectedDataset && activeWorkspace && activeSheetId) {
       const sig = JSON.stringify({
         ds: selectedDataset.name,
@@ -1817,7 +1824,8 @@ export default function AnalyzePage({ setPage, onMenu }: P) {
     ageRange,
     activeSheetId,
     workspacePipelineEnabled,
-    activeWorkspace?.datasetId
+    activeWorkspace?.datasetId,
+    page
   ]);
 
   // Filter lists by search query

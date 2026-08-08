@@ -92,6 +92,7 @@ export default function DatasetsPage({ setPage }: P) {
 
   const [loading, setLd] = useState(true);
   const [uploading, setUpl] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [drag, setDrag] = useState(false);
   const [del, setDel] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -160,70 +161,75 @@ export default function DatasetsPage({ setPage }: P) {
 
   const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB strict cap
 
-  const handleFile = (f: File) => {
+  const handleFile = async (f: File) => {
     if (f.size > MAX_FILE_SIZE_BYTES) {
       alert(`File "${f.name}" (${(f.size / (1024 * 1024)).toFixed(1)} MB) exceeds the maximum browser memory limit of 100 MB.\n\nPlease upload a file smaller than 100 MB.`);
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const text = e.target?.result as string;
-        setUpl(true);
-        // Yield control to browser rendering loop so UI spinner displays immediately
-        await new Promise(r => setTimeout(r, 20));
-        
-        let parsedRows: any[] = [];
-        const isJson = f.name.toLowerCase().endsWith('.json');
-        if (isJson) {
-          parsedRows = loadJSON(f.name, text);
-        } else {
-          parsedRows = await loadCSV(f.name, text);
-        }
-        
-        // Profile and validate dataset shape/integrity immediately via D1 §1.3 (I4) & §1.5
-        const profile = DatasetValidator.profile(parsedRows, f.name);
-        if (profile.shape === 'metadata') {
-          throw new Error(
-            `"${f.name}" appears to be a dataset metadata / descriptor file. ` +
-            `This file describes the dataset but contains NO actual data rows.\n\n` +
-            `Please upload the real records dataset instead.`
-          );
-        }
-        if (profile.shape === 'corrupted' || profile.shape === 'empty') {
-          throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
-        }
+    try {
+      setUpl(true);
+      setUploadProgress(0);
+      // Yield control to browser rendering loop so UI spinner displays immediately
+      await new Promise(r => setTimeout(r, 20));
 
-        const colCount = profile.columnCount;
-
-        // Cache raw CSV/JSON in local IndexedDB instead of localStorage
-        await localDB.saveDatasetCSV(f.name, text);
-
-        // Generate REAL column metadata from actual parsed data
-        const realColsMeta = parsedRows.length > 0
-          ? Object.keys(parsedRows[0]).map(colName => {
-              const samples = parsedRows.slice(0, 10).map(r => r[colName]).filter(v => v != null && v !== '');
-              const numCount = samples.filter(v => typeof v === 'number').length;
-              let colType = 'VARCHAR';
-              if (numCount > samples.length * 0.6) {
-                colType = Number.isInteger(samples.find(v => typeof v === 'number')) ? 'INTEGER' : 'DECIMAL';
-              }
-              return { name: colName, type: colType, is_he: false };
-            })
-          : getSampleColumns(f.name);
-
-        const d = await registerDataset(f.name, f.name.split('.').pop() || 'csv', parsedRows.length, colCount, f.size, realColsMeta);
-        setTableOwner(f.name, d.id);
-        if (!selectedDataset) setSelectedDataset(d);
-        await loadDatasets(ws!.id);
-      } catch (err: any) {
-        alert(`Failed to load dataset: ${err.message}`);
-      } finally {
-        setUpl(false);
+      let parsedRows: any[] = [];
+      const isJson = f.name.toLowerCase().endsWith('.json');
+      let text = '';
+      if (isJson) {
+        text = await f.text();
+        parsedRows = loadJSON(f.name, text);
+      } else {
+        parsedRows = await loadCSV(f.name, f, (frac) => setUploadProgress(frac));
       }
-    };
-    reader.readAsText(f);
+
+      // Profile and validate dataset shape/integrity
+      const profile = DatasetValidator.profile(parsedRows, f.name);
+      if (profile.shape === 'metadata') {
+        throw new Error(
+          `"${f.name}" appears to be a dataset metadata / descriptor file. ` +
+          `This file describes the dataset but contains NO actual data rows.\n\n` +
+          `Please upload the real records dataset instead.`
+        );
+      }
+      if (profile.shape === 'corrupted' || profile.shape === 'empty') {
+        throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
+      }
+
+      const colCount = profile.columnCount;
+
+      // Cache CSV/JSON in local IndexedDB
+      if (isJson) {
+        await localDB.saveDatasetCSV(f.name, text);
+      } else {
+        const headers = parsedRows.length > 0 ? Object.keys(parsedRows[0]).join(',') : '';
+        const sampleCsv = headers + '\n' + parsedRows.slice(0, 1000).map(r => Object.values(r).join(',')).join('\n');
+        await localDB.saveDatasetCSV(f.name, sampleCsv);
+      }
+
+      // Generate column metadata
+      const realColsMeta = parsedRows.length > 0
+        ? Object.keys(parsedRows[0]).map(colName => {
+            const samples = parsedRows.slice(0, 10).map(r => r[colName]).filter(v => v != null && v !== '');
+            const numCount = samples.filter(v => typeof v === 'number').length;
+            let colType = 'VARCHAR';
+            if (numCount > samples.length * 0.6) {
+              colType = Number.isInteger(samples.find(v => typeof v === 'number')) ? 'INTEGER' : 'DECIMAL';
+            }
+            return { name: colName, type: colType, is_he: false };
+          })
+        : getSampleColumns(f.name);
+
+      const d = await registerDataset(f.name, f.name.split('.').pop() || 'csv', parsedRows.length, colCount, f.size, realColsMeta);
+      setTableOwner(f.name, d.id);
+      if (!selectedDataset) setSelectedDataset(d);
+      await loadDatasets(ws!.id);
+    } catch (err: any) {
+      alert(`Failed to load dataset: ${err.message}`);
+    } finally {
+      setUpl(false);
+      setUploadProgress(0);
+    }
   };
 
   const del_ = async (id: number, name: string, e: React.MouseEvent) => {
@@ -302,7 +308,11 @@ export default function DatasetsPage({ setPage }: P) {
           <input ref={fileRef} type="file" accept=".csv,.parquet,.xlsx,.json" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
           <div className="uz-icon">{uploading ? '⏳' : '📂'}</div>
           <div className="uz-title">{uploading ? 'Processing locally...' : 'Drop file here or click to browse'}</div>
-          <div className="uz-desc">{uploading ? 'DuckDB processing — 0 bytes sent' : 'CSV · Parquet · Excel · JSON · Up to 100 MB'}</div>
+          <div className="uz-desc">
+            {uploading
+              ? `Parsing locally — 0 bytes sent${uploadProgress > 0 && uploadProgress < 1 ? ` · ${Math.round(uploadProgress * 100)}%` : ''}`
+              : 'CSV · Parquet · Excel · JSON · Up to 100 MB'}
+          </div>
           {!uploading && <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', marginTop: '0.6rem' }}>{FT.map(f => <span key={f.ext} className={`tag tag-${f.color}`}>{f.icon} {f.ext.toUpperCase()}</span>)}</div>}
         </div>
 

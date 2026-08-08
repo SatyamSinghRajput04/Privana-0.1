@@ -220,52 +220,76 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CSV LOADER (Hardened limits & sanitization)
+// CSV LOADER (Hardened limits & sanitization, Web Worker streaming)
 // ─────────────────────────────────────────────────────────────────────────────
-export function loadCSV(filename: string, csvContent: string): Promise<any[]> {
+export function loadCSV(
+  filename: string,
+  source: string | Blob | File,
+  onProgress?: (fraction: number) => void
+): Promise<any[]> {
   return new Promise((resolve, reject) => {
+    const blob: Blob = typeof source === 'string' ? new Blob([source]) : source;
+    const totalBytes = blob.size;
+
     // 1. File size check (100MB cap)
-    const byteSize = csvContent.length; // Approximate UTF-8 size
-    if (byteSize > 100 * 1024 * 1024) {
-      return reject(new Error(`Duplicate and/or overflow Column check failed: File size exceeds the strict cap of 100 MB (size: ${(byteSize / (1024 * 1024)).toFixed(1)} MB).`));
+    if (totalBytes > 100 * 1024 * 1024) {
+      return reject(new Error(`Duplicate and/or overflow Column check failed: File size exceeds the strict cap of 100 MB (size: ${(totalBytes / (1024 * 1024)).toFixed(1)} MB).`));
     }
 
-    // 2. Headers count & uniqueness checks (slice first line without splitting full string)
-    const firstNewline = csvContent.indexOf('\n');
-    const firstLine = firstNewline !== -1 ? csvContent.slice(0, firstNewline) : csvContent;
-    if (firstLine.trim()) {
-      const parsedHeader = Papa.parse(firstLine.trim()).data[0] as string[];
-      if (parsedHeader && parsedHeader.length > 0) {
-        if (parsedHeader.length > 500) {
-          return reject(new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${parsedHeader.length} columns).`));
-        }
-        const seen = new Set<string>();
-        for (const h of parsedHeader) {
-          const cleanH = h?.trim() || '';
-          if (cleanH === '') {
-            return reject(new Error(`Ingestion failed: Found empty column header in CSV.`));
-          }
-          if (seen.has(cleanH)) {
-            return reject(new Error(`Ingestion failed: Duplicate column header name "${cleanH}" detected. Ingestion requires unique headers.`));
-          }
-          seen.add(cleanH);
-        }
-      }
-    }
+    let headerChecked = false;
+    let headerFields: string[] = [];
+    let headerError: Error | null = null;
+    const rows: any[] = [];
+    let bytesSeen = 0;
+    const CHUNK_SIZE = 1024 * 1024;
 
-    Papa.parse(csvContent, {
+    Papa.parse(blob as File, {
+      worker: true,
       header: true,
       dynamicTyping: true,
       skipEmptyLines: true,
-      complete: (results) => {
-        if (results.errors.length > 0) {
-          console.warn('CSV parsing errors:', results.errors);
+      step: (results, parser) => {
+        const row = results.data as any;
+        if (!headerChecked) {
+          headerChecked = true;
+          headerFields = Object.keys(row || {});
+          if (headerFields.length > 500) {
+            headerError = new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${headerFields.length} columns).`);
+            parser.abort();
+            return;
+          }
+          const seen = new Set<string>();
+          for (const h of headerFields) {
+            const cleanH = h?.trim() || '';
+            if (cleanH === '') {
+              headerError = new Error(`Ingestion failed: Found empty column header in CSV.`);
+              parser.abort();
+              return;
+            }
+            if (seen.has(cleanH)) {
+              headerError = new Error(`Ingestion failed: Duplicate column header name "${cleanH}" detected. Ingestion requires unique headers.`);
+              parser.abort();
+              return;
+            }
+            seen.add(cleanH);
+          }
         }
-
+        rows.push(row);
+        if (onProgress && totalBytes > 0) {
+          bytesSeen = Math.min(totalBytes, bytesSeen + CHUNK_SIZE);
+          onProgress(bytesSeen / totalBytes);
+        }
+      },
+      complete: () => {
+        if (headerError) return reject(headerError);
         try {
-          normalizeAndProfileData(filename, results.data, csvContent);
-          registerTable(filename, results.data);
-          resolve(results.data);
+          const versionSignature = typeof source === 'string'
+            ? source
+            : [filename, totalBytes, rows.length, headerFields.join(',')].join('|');
+          normalizeAndProfileData(filename, rows, versionSignature);
+          registerTable(filename, rows);
+          if (onProgress) onProgress(1);
+          resolve(rows);
         } catch (e: any) {
           reject(e);
         }

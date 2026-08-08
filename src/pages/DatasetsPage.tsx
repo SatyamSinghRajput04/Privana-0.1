@@ -175,10 +175,10 @@ export default function DatasetsPage({ setPage }: P) {
 
       let parsedRows: any[] = [];
       const isJson = f.name.toLowerCase().endsWith('.json');
-      let text = '';
+      const rawText = await f.text();
+
       if (isJson) {
-        text = await f.text();
-        parsedRows = loadJSON(f.name, text);
+        parsedRows = loadJSON(f.name, rawText);
       } else {
         parsedRows = await loadCSV(f.name, f, (frac) => setUploadProgress(frac));
       }
@@ -198,14 +198,8 @@ export default function DatasetsPage({ setPage }: P) {
 
       const colCount = profile.columnCount;
 
-      // Cache CSV/JSON in local IndexedDB
-      if (isJson) {
-        await localDB.saveDatasetCSV(f.name, text);
-      } else {
-        const headers = parsedRows.length > 0 ? Object.keys(parsedRows[0]).join(',') : '';
-        const sampleCsv = headers + '\n' + parsedRows.slice(0, 1000).map(r => Object.values(r).join(',')).join('\n');
-        await localDB.saveDatasetCSV(f.name, sampleCsv);
-      }
+      // Cache full raw CSV/JSON text in local IndexedDB for complete persistence on refresh
+      await localDB.saveDatasetCSV(f.name, rawText);
 
       // Generate column metadata
       const realColsMeta = parsedRows.length > 0

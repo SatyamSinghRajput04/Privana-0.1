@@ -7,7 +7,7 @@ import {
   ScatterChart, Scatter, ZAxis, ComposedChart, ReferenceLine
 } from 'recharts';
 import type { Page } from '../App';
-import { executeSQL, getSqlTableName, getTableSchema, getTableOwner, isTableLoaded, loadCSV, loadJSON, setTableOwner } from '../lib/sqlEngine';
+import { executeSQL, getSqlTableName, getTableSchema, getTableOwner, getTableRowCount, isTableLoaded, loadCSV, loadJSON, setTableOwner } from '../lib/sqlEngine';
 import { validateDatasetSafety } from '../domain/safeCompute/preflight';
 import { runSafeCompute } from '../domain/safeCompute';
 import { ExcludedFeature } from '../domain/safeCompute/types';
@@ -1040,35 +1040,35 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           if (!isStale) {
             setQaResponse(result);
             setAnalyticalContext(null); // Managed inside ResultView / ComputedView
-          }
-          
-          // Wire store actions so dynamic snapshots are added to the workspace
-          useWorkspaceStore.getState().addAnalyticalSnapshot(inputToUse, result);
 
-          // ── Save query to history (IndexedDB in solo mode, server in team mode) ──
-          if (ws && selectedDataset && result.status !== 'error') {
-            const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
-            const intentRaw = (result as any).plan?.intent ?? '';
-            const chartObj = (result as any).chart;
-            const chartType = chartObj?.chartType ?? (intentRaw === 'correlation' ? 'scatter' : intentRaw === 'filter' ? 'table' : 'bar');
-            const xAxisKey = chartObj?.xAxisKey ?? '';
-            const yAxisKey = chartObj?.yAxisKey ?? '';
-            const chartTitle = chartObj?.title ?? '';
+            // Wire store actions so dynamic snapshots are added to the workspace
+            useWorkspaceStore.getState().addAnalyticalSnapshot(inputToUse, result);
 
-            saveQuery({
-              workspace_id: ws.id,
-              dataset_id: selectedDataset.id,
-              question: inputToUse,
-              generated_sql: (result as any).provenance?.sql ?? '',
-              result_data: resultRows.slice(0, 500), // cap to 500 rows for storage
-              chart_type: chartType,
-              x_axis_key: xAxisKey,
-              y_axis_key: yAxisKey,
-              chart_title: chartTitle,
-              insights: (result as any).insights ?? [],
-              execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
-              row_count: resultRows.length,
-            }).catch(e => console.warn('Failed to save query to history:', e));
+            // ── Save query to history (IndexedDB in solo mode, server in team mode) ──
+            if (ws && selectedDataset && result.status !== 'error') {
+              const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
+              const intentRaw = (result as any).plan?.intent ?? '';
+              const chartObj = (result as any).chart;
+              const chartType = chartObj?.chartType ?? (intentRaw === 'correlation' ? 'scatter' : intentRaw === 'filter' ? 'table' : 'bar');
+              const xAxisKey = chartObj?.xAxisKey ?? '';
+              const yAxisKey = chartObj?.yAxisKey ?? '';
+              const chartTitle = chartObj?.title ?? '';
+
+              saveQuery({
+                workspace_id: ws.id,
+                dataset_id: selectedDataset.id,
+                question: inputToUse,
+                generated_sql: (result as any).provenance?.sql ?? '',
+                result_data: resultRows.slice(0, 500), // cap to 500 rows for storage
+                chart_type: chartType,
+                x_axis_key: xAxisKey,
+                y_axis_key: yAxisKey,
+                chart_title: chartTitle,
+                insights: (result as any).insights ?? [],
+                execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
+                row_count: resultRows.length,
+              }).catch(e => console.warn('Failed to save query to history:', e));
+            }
           }
 
           // ─────────────────────────────────────────────────────────────────
@@ -1167,26 +1167,26 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             setQaResponse(result);
             setAnalyticalContext(null);
             setIsFilterQueryActive(false);
-          }
 
-          // Save query to history
-          if (ws && result.status !== 'error') {
-            const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
-            const intentRaw = (result as any).plan?.intent ?? '';
-            const chartType = intentRaw === 'correlation' ? 'scatter'
-              : intentRaw === 'filter' ? 'table'
-              : 'bar';
-            saveQuery({
-              workspace_id: ws.id,
-              dataset_id: selectedDataset.id,
-              question: inputToUse,
-              generated_sql: (result as any).provenance?.sql ?? '',
-              result_data: resultRows.slice(0, 500),
-              chart_type: chartType,
-              insights: (result as any).insights ?? [],
-              execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
-              row_count: resultRows.length,
-            }).catch(e => console.warn('Failed to save query to history:', e));
+            // Save query to history
+            if (ws && result.status !== 'error') {
+              const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
+              const intentRaw = (result as any).plan?.intent ?? '';
+              const chartType = intentRaw === 'correlation' ? 'scatter'
+                : intentRaw === 'filter' ? 'table'
+                : 'bar';
+              saveQuery({
+                workspace_id: ws.id,
+                dataset_id: selectedDataset.id,
+                question: inputToUse,
+                generated_sql: (result as any).provenance?.sql ?? '',
+                result_data: resultRows.slice(0, 500),
+                chart_type: chartType,
+                insights: (result as any).insights ?? [],
+                execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
+                row_count: resultRows.length,
+              }).catch(e => console.warn('Failed to save query to history:', e));
+            }
           }
         } catch (err: any) {
           console.error('Error in fallback analytics pipeline:', err);
@@ -1357,29 +1357,29 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             if (!isStale) {
               setQaResponse(result);
               setAnalyticalContext(null);
-            }
 
-            // Add snapshot to workspace store
-            useWorkspaceStore.getState().addAnalyticalSnapshot(currentInput, result);
+              // Add snapshot to workspace store
+              useWorkspaceStore.getState().addAnalyticalSnapshot(currentInput, result);
 
-            // Save query to history
-            if (ws && selectedDataset && result.status !== 'error') {
-              const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
-              const intentRaw = (result as any).plan?.intent ?? '';
-              const chartType = intentRaw === 'correlation' ? 'scatter'
-                : intentRaw === 'filter' ? 'table'
-                : 'bar';
-              saveQuery({
-                workspace_id: ws.id,
-                dataset_id: selectedDataset.id,
-                question: currentInput,
-                generated_sql: (result as any).provenance?.sql ?? '',
-                result_data: resultRows.slice(0, 500),
-                chart_type: chartType,
-                insights: (result as any).insights ?? [],
-                execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
-                row_count: resultRows.length,
-              }).catch(e => console.warn('Failed to save query to history:', e));
+              // Save query to history
+              if (ws && selectedDataset && result.status !== 'error') {
+                const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
+                const intentRaw = (result as any).plan?.intent ?? '';
+                const chartType = intentRaw === 'correlation' ? 'scatter'
+                  : intentRaw === 'filter' ? 'table'
+                  : 'bar';
+                saveQuery({
+                  workspace_id: ws.id,
+                  dataset_id: selectedDataset.id,
+                  question: currentInput,
+                  generated_sql: (result as any).provenance?.sql ?? '',
+                  result_data: resultRows.slice(0, 500),
+                  chart_type: chartType,
+                  insights: (result as any).insights ?? [],
+                  execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
+                  row_count: resultRows.length,
+                }).catch(e => console.warn('Failed to save query to history:', e));
+              }
             }
 
             // Contextual card injection (Phase 3 sheet matching)
@@ -1617,25 +1617,29 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     try {
-      // Fetch filtered rows once using a basic SQL query
-      const allRows = executeSQL(`SELECT * FROM ${tbl} ${whereSQL}`);
+      // Fetch filtered rows — for large datasets (> 5,000 rows), use a representative
+      // sample for fast baseline UI previews to prevent main-thread freezing.
+      const totalCount = getTableRowCount(tableName);
+      const allRows = executeSQL(`SELECT * FROM ${tbl} ${whereSQL} LIMIT ${totalCount > 10000 ? 5000 : 100000}`);
+      const sampleRows = allRows.length > 5000 ? allRows.slice(0, 5000) : allRows;
 
       if (isMentalHealthSchema) {
         // --- Calculate KPIs ---
-        const count = allRows.length;
+        const count = totalCount || allRows.length;
         let sleepSum = 0;
         let ageSum = 0;
         let stressSum = 0;
-        allRows.forEach(r => {
+        sampleRows.forEach(r => {
           sleepSum += Number(r.sleep_hours || 0);
           ageSum += Number(r.age || 0);
           stressSum += Number(r.stress_level || 0);
         });
 
+        const sampleLen = sampleRows.length;
         setKpis({
-          sleep: parseFloat((count > 0 ? sleepSum / count : 0).toFixed(2)),
-          age: parseFloat((count > 0 ? ageSum / count : 0).toFixed(2)),
-          stress: parseFloat((count > 0 ? stressSum / count : 0).toFixed(1)),
+          sleep: parseFloat((sampleLen > 0 ? sleepSum / sampleLen : 0).toFixed(2)),
+          age: parseFloat((sampleLen > 0 ? ageSum / sampleLen : 0).toFixed(2)),
+          stress: parseFloat((sampleLen > 0 ? stressSum / sampleLen : 0).toFixed(1)),
           records: count
         });
 
@@ -1748,27 +1752,33 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         setAnxietyLevelsData(sortedAnxiety);
       } else {
         // --- ADAPTIVE GENERIC SYSTEM (For non-Teen dataset files) ---
+        const isIdCol = (n: string) => {
+          const lower = n.toLowerCase();
+          return lower === 'id' || lower.endsWith('_id') || lower.endsWith('id') || lower.endsWith('_uuid') || lower.endsWith('_hash') || lower.endsWith('_key');
+        };
+
         const numCols = schema.filter(c => c.type === 'number');
-        const strCols = schema.filter(c => c.type === 'string');
+        const strCols = schema.filter(c => c.type === 'string' && !isIdCol(c.name));
 
         const groupCol = strCols[0]?.name;
         const valCol = numCols[0]?.name;
         const valCol2 = numCols[1]?.name;
 
-        const count = allRows.length;
+        const count = totalCount || allRows.length;
         let sleepSum = 0;
         let ageSum = 0;
 
         if (valCol) {
-          allRows.forEach(r => { sleepSum += Number(r[valCol] || 0); });
+          sampleRows.forEach(r => { sleepSum += Number(r[valCol] || 0); });
         }
         if (valCol2) {
-          allRows.forEach(r => { ageSum += Number(r[valCol2] || 0); });
+          sampleRows.forEach(r => { ageSum += Number(r[valCol2] || 0); });
         }
 
+        const sampleLen = sampleRows.length;
         setKpis({
-          sleep: parseFloat((count > 0 ? sleepSum / count : 0).toFixed(2)),
-          age: parseFloat((count > 0 ? ageSum / count : 0).toFixed(2)),
+          sleep: parseFloat((sampleLen > 0 ? sleepSum / sampleLen : 0).toFixed(2)),
+          age: parseFloat((sampleLen > 0 ? ageSum / sampleLen : 0).toFixed(2)),
           stress: 0,
           records: count
         });
@@ -1776,7 +1786,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         if (groupCol && valCol) {
           const barGroupSum: Record<string, number> = {};
           const barGroupCount: Record<string, number> = {};
-          allRows.forEach(r => {
+          sampleRows.forEach(r => {
             const key = String(r[groupCol] || 'None');
             barGroupSum[key] = (barGroupSum[key] || 0) + Number(r[valCol] || 0);
             barGroupCount[key] = (barGroupCount[key] || 0) + 1;
@@ -1803,7 +1813,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         if (valCol && valCol2) {
           const lineGroupSum: Record<string, number> = {};
           const lineGroupCount: Record<string, number> = {};
-          allRows.forEach(r => {
+          sampleRows.forEach(r => {
             const key = String(r[valCol] || '0');
             lineGroupSum[key] = (lineGroupSum[key] || 0) + Number(r[valCol2] || 0);
             lineGroupCount[key] = (lineGroupCount[key] || 0) + 1;

@@ -227,7 +227,7 @@ export function loadCSV(
   source: string | Blob | File,
   onProgress?: (fraction: number) => void
 ): Promise<any[]> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const blob: Blob = typeof source === 'string' ? new Blob([source]) : source;
     const totalBytes = blob.size;
 
@@ -236,9 +236,42 @@ export function loadCSV(
       return reject(new Error(`Duplicate and/or overflow Column check failed: File size exceeds the strict cap of 100 MB (size: ${(totalBytes / (1024 * 1024)).toFixed(1)} MB).`));
     }
 
-    let headerChecked = false;
-    let headerFields: string[] = [];
-    let headerError: Error | null = null;
+    // 2. Pre-validate unparsed raw header line for duplicates and column count
+    try {
+      let headerStr = '';
+      if (typeof source === 'string') {
+        const firstNewline = source.indexOf('\n');
+        headerStr = firstNewline !== -1 ? source.slice(0, firstNewline) : source;
+      } else {
+        const sliceText = await source.slice(0, 65536).text();
+        const firstNewline = sliceText.indexOf('\n');
+        headerStr = firstNewline !== -1 ? sliceText.slice(0, firstNewline) : sliceText;
+      }
+
+      const trimmedHeader = headerStr.trim();
+      if (trimmedHeader) {
+        const parsedHeader = Papa.parse(trimmedHeader).data[0] as string[];
+        if (parsedHeader && parsedHeader.length > 0) {
+          if (parsedHeader.length > 500) {
+            return reject(new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${parsedHeader.length} columns).`));
+          }
+          const seen = new Set<string>();
+          for (const h of parsedHeader) {
+            const cleanH = h?.trim() || '';
+            if (cleanH === '') {
+              return reject(new Error(`Ingestion failed: Found empty column header in CSV.`));
+            }
+            if (seen.has(cleanH)) {
+              return reject(new Error(`Ingestion failed: Duplicate column header name "${cleanH}" detected. Ingestion requires unique headers.`));
+            }
+            seen.add(cleanH);
+          }
+        }
+      }
+    } catch (hErr: any) {
+      return reject(hErr);
+    }
+
     const rows: any[] = [];
     let bytesSeen = 0;
     const CHUNK_SIZE = 1024 * 1024;
@@ -248,32 +281,8 @@ export function loadCSV(
       header: true,
       dynamicTyping: true,
       skipEmptyLines: true,
-      step: (results, parser) => {
+      step: (results) => {
         const row = results.data as any;
-        if (!headerChecked) {
-          headerChecked = true;
-          headerFields = Object.keys(row || {});
-          if (headerFields.length > 500) {
-            headerError = new Error(`Duplicate and/or overflow Column check failed: Column count exceeds the strict cap of 500 columns (found ${headerFields.length} columns).`);
-            parser.abort();
-            return;
-          }
-          const seen = new Set<string>();
-          for (const h of headerFields) {
-            const cleanH = h?.trim() || '';
-            if (cleanH === '') {
-              headerError = new Error(`Ingestion failed: Found empty column header in CSV.`);
-              parser.abort();
-              return;
-            }
-            if (seen.has(cleanH)) {
-              headerError = new Error(`Ingestion failed: Duplicate column header name "${cleanH}" detected. Ingestion requires unique headers.`);
-              parser.abort();
-              return;
-            }
-            seen.add(cleanH);
-          }
-        }
         rows.push(row);
         if (onProgress && totalBytes > 0) {
           bytesSeen = Math.min(totalBytes, bytesSeen + CHUNK_SIZE);
@@ -281,8 +290,8 @@ export function loadCSV(
         }
       },
       complete: () => {
-        if (headerError) return reject(headerError);
         try {
+          const headerFields = rows.length > 0 ? Object.keys(rows[0] || {}) : [];
           const versionSignature = typeof source === 'string'
             ? source
             : [filename, totalBytes, rows.length, headerFields.join(',')].join('|');

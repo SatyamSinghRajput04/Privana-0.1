@@ -38,47 +38,61 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
 
   const rawCategoryCols = columns.filter(c => c.type === 'text' || c.type === 'string' || c.type === 'category' || c.type === 'boolean');
   const categoryCols = rawCategoryCols.filter(c => !isFreeTextOrIdCol(c.name));
-  const activeCategoryCols = categoryCols.length > 0 ? categoryCols : (rawCategoryCols.length > 0 ? rawCategoryCols : columns);
+  
+  // Safe category selection: NEVER select a high-cardinality ID/UUID column for grouping
+  const validCategory = categoryCols[0]?.name;
+  const validNumeric = activeNumericCols[0]?.name;
 
   const sheets: SheetSpec[] = [];
 
   // Tab 1: Overview Dashboard
   const overviewCards: CardDefinition[] = [];
 
-  const firstCat = activeCategoryCols[0]?.name || columns[0]?.name || 'column_1';
-  const firstNum = activeNumericCols[0]?.name || columns.find(c => c.name !== firstCat)?.name || firstCat;
-
-  if (columns.length > 0) {
-    // Card 1: Distribution of first category/string column
+  if (validCategory) {
+    // Card 1: Distribution of categorical column
     overviewCards.push({
       id: 'card_overview_dist_1',
-      title: `${formatFieldName(firstCat)} Distribution`,
+      title: `${formatFieldName(validCategory)} Distribution`,
       chartType: 'donut',
-      spec: { kind: 'distribution', metricColumn: firstCat, binCount: 10 }
+      spec: { kind: 'distribution', metricColumn: validCategory, binCount: 10 }
     });
 
-    if (activeNumericCols.length > 0) {
+    if (validNumeric) {
       // Card 2: Grouped Average (numeric by category)
       overviewCards.push({
         id: 'card_overview_grouped_1',
-        title: `Average ${formatFieldName(firstNum)} by ${formatFieldName(firstCat)}`,
+        title: `Average ${formatFieldName(validNumeric)} by ${formatFieldName(validCategory)}`,
         chartType: 'bar',
-        spec: { kind: 'groupedAverage', metricColumn: firstNum, groupColumn: firstCat, aggType: 'avg' }
+        spec: { kind: 'groupedAverage', metricColumn: validNumeric, groupColumn: validCategory, aggType: 'avg' }
       });
 
       // Card 3: Ranking (Top 5 categories by average numeric)
       overviewCards.push({
         id: 'card_overview_ranking_1',
-        title: `Top Categories in ${formatFieldName(firstCat)} by ${formatFieldName(firstNum)}`,
+        title: `Top Categories in ${formatFieldName(validCategory)} by ${formatFieldName(validNumeric)}`,
         chartType: 'bar',
-        spec: { kind: 'ranking', metricColumn: firstNum, categoryColumn: firstCat, limit: 5, sort: 'desc' }
+        spec: { kind: 'ranking', metricColumn: validNumeric, categoryColumn: validCategory, limit: 5, sort: 'desc' }
       });
     }
+  } else {
+    // Dataset lacks low-cardinality category columns (e.g. ID/timestamp heavy tables)
+    // Fall back to sample table preview to avoid high-cardinality GROUP BY freezes
+    const previewCols = columns.slice(0, 5).map(c => c.name);
+    overviewCards.push({
+      id: 'card_overview_table_preview',
+      title: `${formatFieldName(datasetName)} Records Preview`,
+      chartType: 'table',
+      spec: {
+        kind: 'segmentSummary',
+        segmentColumn: columns[0]?.name || 'id',
+        metricColumns: previewCols
+      }
+    });
   }
 
   // Card 4: Segment Summary Report (if we have at least one categorical and one numeric column)
-  if (activeCategoryCols.length >= 1 && activeNumericCols.length >= 1) {
-    const segmentCol = activeCategoryCols[0].name;
+  if (categoryCols.length >= 1 && activeNumericCols.length >= 1) {
+    const segmentCol = categoryCols[0].name;
     const metricCols = activeNumericCols.slice(0, 2).map(c => c.name);
     overviewCards.push({
       id: 'card_overview_segment_summary',
@@ -120,7 +134,7 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
       });
     } else {
       // Otherwise, distribution of second category or ranking
-      const secondCat = activeCategoryCols[1]?.name || activeCategoryCols[0]?.name || columns[0]?.name || 'category';
+      const secondCat = categoryCols[1]?.name || categoryCols[0]?.name || columns[0]?.name || 'category';
       relationshipCards.push({
         id: 'card_rel_dist_2',
         title: `${formatFieldName(secondCat)} Distribution`,

@@ -408,6 +408,26 @@ export function isTableLoaded(tableName: string): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TABLE OWNERSHIP & LIFECYCLE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+const TABLE_OWNERS: Record<string, string> = {};
+
+export function setTableOwner(tableName: string, datasetId: string): void {
+  TABLE_OWNERS[getSqlTableName(tableName)] = datasetId;
+}
+
+export function getTableOwner(tableName: string): string | undefined {
+  return TABLE_OWNERS[getSqlTableName(tableName)];
+}
+
+export function dropTable(name: string): void {
+  const sqlName = getSqlTableName(name);
+  try { alasql('DROP TABLE IF EXISTS ' + sqlName); } catch { /* ignore */ }
+  delete (alasql.tables as any)[sqlName];
+  delete TABLE_OWNERS[sqlName];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // LEGACY QUERY GENERATOR & INSIGHTS — REMOVED
 //
 // These functions have been removed as part of the Phase 1 pipeline unification.

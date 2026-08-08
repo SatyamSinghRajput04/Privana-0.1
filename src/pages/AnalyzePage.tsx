@@ -7,7 +7,7 @@ import {
   ScatterChart, Scatter, ZAxis, ComposedChart, ReferenceLine
 } from 'recharts';
 import type { Page } from '../App';
-import { executeSQL, getSqlTableName, getTableSchema, isTableLoaded, loadCSV, loadJSON } from '../lib/sqlEngine';
+import { executeSQL, getSqlTableName, getTableSchema, getTableOwner, isTableLoaded, loadCSV, loadJSON, setTableOwner } from '../lib/sqlEngine';
 import { validateDatasetSafety } from '../domain/safeCompute/preflight';
 import { runSafeCompute } from '../domain/safeCompute';
 import { ExcludedFeature } from '../domain/safeCompute/types';
@@ -411,7 +411,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
   const ensureTableLoaded = async (ds: any): Promise<boolean> => {
     if (!ds || !ds.name) return false;
     const tableName = ds.name;
-    if (isTableLoaded(tableName)) return true;
+    if (isTableLoaded(tableName) && getTableOwner(tableName) === ds.id) return true;
 
     try {
       setLoadingTable(tableName);
@@ -434,6 +434,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         } else {
           await loadCSV(tableName, text);
         }
+        setTableOwner(tableName, ds.id);
         setTableLoadedState(tableName);
         return isTableLoaded(tableName);
       }
@@ -1475,7 +1476,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     }
     const tableName = selectedDataset.name;
 
-    if (isTableLoaded(tableName)) {
+    if (isTableLoaded(tableName) && getTableOwner(tableName) === selectedDataset.id) {
       setTableLoadedState(tableName);
       return;
     }
@@ -1492,6 +1493,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           } else {
             await loadCSV(tableName, text);
           }
+          setTableOwner(tableName, selectedDataset.id);
           setTableLoadedState(tableName);
         } else {
           console.warn('Dataset content not found in IndexedDB datasets cache for:', tableName);

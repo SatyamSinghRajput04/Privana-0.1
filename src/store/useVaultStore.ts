@@ -1,4 +1,5 @@
 import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
+import { dropTable } from '../lib/sqlEngine';
 import { create } from 'zustand';
 import type { Page, Workspace } from '../App';
 import { localDB } from '../lib/indexedDb';
@@ -481,6 +482,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
       });
+      dropTable(name);
       const updated = datasets.filter((x: any) => x.id !== id);
       set({ datasets: updated });
       if (selectedDataset && selectedDataset.id === id) {

@@ -2,7 +2,7 @@ import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import type { Page } from '../App';
-import { loadCSV, loadJSON } from '../lib/sqlEngine';
+import { loadCSV, loadJSON, setTableOwner } from '../lib/sqlEngine';
 import { DatasetValidator } from '../domain/validator/validator';
 import { useVaultStore } from '../store/useVaultStore';
 import { localDB } from '../lib/indexedDb';
@@ -116,6 +116,7 @@ export default function DatasetsPage({ setPage }: P) {
         
         // Register dataset in state/DB
         const d = await registerDataset(name, type, rows, cols, size, finalCols);
+        setTableOwner(name, d.id);
         
         // Save data in IndexedDB
         await localDB.saveDatasetCSV(name, csvHeader);
@@ -140,6 +141,7 @@ export default function DatasetsPage({ setPage }: P) {
 
         // Register dataset in state/DB
         const d = await registerDataset(name, type, rows, cols, size, finalCols);
+        setTableOwner(name, d.id);
         
         // Save data in IndexedDB
         const csvStr = sampleData.map(r => Object.values(r).join(',')).join('\n');
@@ -212,6 +214,7 @@ export default function DatasetsPage({ setPage }: P) {
           : getSampleColumns(f.name);
 
         const d = await registerDataset(f.name, f.name.split('.').pop() || 'csv', parsedRows.length, colCount, f.size, realColsMeta);
+        setTableOwner(f.name, d.id);
         if (!selectedDataset) setSelectedDataset(d);
         await loadDatasets(ws!.id);
       } catch (err: any) {

@@ -83,9 +83,9 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
       title: `${formatFieldName(datasetName)} Records Preview`,
       chartType: 'table',
       spec: {
-        kind: 'segmentSummary',
-        segmentColumn: columns[0]?.name || 'id',
-        metricColumns: previewCols
+        kind: 'tablePreview',
+        columns: previewCols,
+        limit: 50
       }
     });
   }
@@ -243,7 +243,7 @@ export const executeWorkspaceActiveTab = async (
   await Promise.all(
     currentSheet.cards.map(async (card) => {
       const spec = card.spec;
-      const isQueryable = spec && ('kind' in spec) && ['groupedAverage', 'correlation', 'distribution', 'ranking', 'segmentSummary'].includes(spec.kind);
+      const isQueryable = spec && ('kind' in spec) && ['groupedAverage', 'correlation', 'distribution', 'ranking', 'segmentSummary', 'tablePreview'].includes(spec.kind);
       if (!isQueryable) {
         return; // Skip static narrative, table, and kpi cards
       }
@@ -321,6 +321,13 @@ const compileCardSpecToSQL = (spec: CardSpec, tableName: string, whereClause: st
       };
     }
 
+    if (spec.kind === 'tablePreview') {
+      const colSelect = spec.columns && spec.columns.length > 0 ? spec.columns.map(q).join(', ') : '*';
+      return {
+        sql: `SELECT ${colSelect} FROM ${q(tableName)} ${where} LIMIT ${spec.limit || 50}`
+      };
+    }
+
     if (spec.kind === 'segmentSummary') {
       const selectFields = [
         q(spec.segmentColumn),
@@ -331,7 +338,9 @@ const compileCardSpecToSQL = (spec: CardSpec, tableName: string, whereClause: st
         sql: `SELECT ${selectFields.join(', ')}
               FROM ${q(tableName)}
               ${where}
-              GROUP BY ${q(spec.segmentColumn)}`
+              GROUP BY ${q(spec.segmentColumn)}
+              ORDER BY [count] DESC
+              LIMIT 25`
       };
     }
   }
@@ -351,6 +360,17 @@ const mapCardRowsToVisualContract = (card: CardDefinition, rows: any[]): VisualC
       schemaVersion: 1,
       data: rows,
       columns: Object.keys(rows[0] || {})
+    };
+  }
+
+  if (spec.kind === 'tablePreview') {
+    const cols = rows.length > 0 ? Object.keys(rows[0]) : (spec.columns || []);
+    return {
+      kind: 'tableRows',
+      schemaVersion: 1,
+      data: rows,
+      columns: cols,
+      rowCount: rows.length
     };
   }
 

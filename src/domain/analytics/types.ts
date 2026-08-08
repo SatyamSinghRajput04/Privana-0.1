@@ -184,6 +184,7 @@ export type CardSpec =
   | { kind: 'distribution'; metricColumn: string; binCount: number; }
   | { kind: 'ranking'; metricColumn: string; categoryColumn: string; limit: number; sort: 'asc' | 'desc'; }
   | { kind: 'segmentSummary'; segmentColumn: string; metricColumns: string[]; }
+  | { kind: 'tablePreview'; columns?: string[]; limit?: number; }
   | { type: 'kpi'; value: string | number; sub?: string; }
   | { type: 'table'; rows: any[]; }
   | { type: 'narrative'; text: string; provenance?: Provenance; };

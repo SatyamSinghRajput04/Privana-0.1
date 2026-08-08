@@ -431,6 +431,11 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     committedPlanId
   } = useCockpitStore();
 
+  // Ownership guard: only consume the global committed visual if it belongs
+  // to this panel's planId. Without this, every panel renders the same chart.
+  const myPlanId = result?.plan?.planId ?? null;
+  const ownsCommitted = !!(committedVisual && committedPlanId && myPlanId === committedPlanId);
+
   const {
     workspacePipelineEnabled,
     activeWorkspace,
@@ -1053,11 +1058,6 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   // Fallback to legacy map() if not committed (e.g. legacy query paths)
   // ─────────────────────────────────────────────────────────────────────────────
   const layout = React.useMemo(() => {
-    // Ownership guard: only consume the global committed visual if it belongs
-    // to this panel's planId. Without this, every panel renders the same chart.
-    const myPlanId = result?.plan?.planId ?? null;
-    const ownsCommitted = committedVisual && committedPlanId && myPlanId === committedPlanId;
-
     if (ownsCommitted) {
       const kind = committedVisual.kind;
       // Map visual contract kind to standard UI VisualLayout representation
@@ -1486,7 +1486,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
                 </div>
               ) : (
                 <UnifiedChart
-                  contract={committedVisual || undefined}
+                  contract={ownsCommitted ? (committedVisual ?? undefined) : undefined}
                   data={layout.data}
                   chartType={layout.chartType}
                   xAxisKey={layout.xAxisKey}

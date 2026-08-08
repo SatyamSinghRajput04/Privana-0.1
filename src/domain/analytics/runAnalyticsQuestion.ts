@@ -30,6 +30,12 @@ export interface AnalyticsContext {
   profile: any;
   bypassMetadataCheck?: boolean;
   minRowCount?: number;
+  /**
+   * Run id captured by the caller (via useCockpitStore.getState().startNewRun()) when the
+   * question was dispatched. Committing with this instead of re-reading
+   * currentRunId lets the store's Latest-Wins check catch a commit from a superseded run.
+   */
+  runId?: number;
 }
 
 /**
@@ -441,7 +447,8 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     try {
       const visualContract = mapToVisualContract(finalResult);
       if (visualContract) {
-        useCockpitStore.getState().commitResult(useCockpitStore.getState().currentRunId, visualContract, plan.planId);
+        const runId = ctx.runId ?? useCockpitStore.getState().currentRunId;
+        useCockpitStore.getState().commitResult(runId, visualContract, plan.planId);
       }
     } catch (commitErr) {
       console.warn('Failed to commit visual contract to cockpit store:', commitErr);

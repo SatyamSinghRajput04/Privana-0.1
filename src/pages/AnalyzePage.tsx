@@ -322,6 +322,9 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
 
   const resultContainerRef = useRef<HTMLDivElement>(null);
   const hasQueryResult = qaResponse && typeof qaResponse === 'object';
+  // Guards against out-of-order async responses: a slower earlier query must
+  // not overwrite a faster, more recent one's on-screen answer/chart.
+  const latestQuestionRunIdRef = useRef(0);
 
     useEffect(() => {
     if (hasQueryResult && resultContainerRef.current) {
@@ -991,6 +994,9 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     setQaLoading(true);
     setLoadingStage(0);
 
+    const runId = useCockpitStore.getState().startNewRun();
+    latestQuestionRunIdRef.current = runId;
+
     if (workspacePipelineEnabled && selectedDataset) {
       // Staged loading transitions for premium feel
       setTimeout(() => setLoadingStage(1), 200);
@@ -1013,6 +1019,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             rows,
             profile,
             bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
+            runId
           };
           
           const result = await runAnalyticsQuestion(inputToUse, context);
@@ -1025,8 +1032,14 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             console.error('Failed to log evaluation run:', logErr);
           }
           
-          setQaResponse(result);
-          setAnalyticalContext(null); // Managed inside ResultView / ComputedView
+          // A newer question may have been fired while this one was in flight —
+          // don't let a stale, slower response overwrite the current on-screen answer.
+          const isStale = runId !== latestQuestionRunIdRef.current;
+
+          if (!isStale) {
+            setQaResponse(result);
+            setAnalyticalContext(null); // Managed inside ResultView / ComputedView
+          }
           
           // Wire store actions so dynamic snapshots are added to the workspace
           useWorkspaceStore.getState().addAnalyticalSnapshot(inputToUse, result);
@@ -1062,7 +1075,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           // For computed/partial results, inject the answer as a highlighted
           // card into the most relevant static sheet and auto-switch to it.
           // ─────────────────────────────────────────────────────────────────
-          if ((result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
+          if (!isStale && (result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
             try {
               const visualContract = mapToVisualContract(result);
               const targetSheetId = matchResultToSheet(result, activeWorkspace);
@@ -1096,18 +1109,22 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         } catch (err: any) {
           console.error('Error in new analytics pipeline:', err);
           const errorMsg = err.message || 'An unexpected error occurred in the analytics pipeline.';
-          setQaResponse({
-            status: 'error',
-            debugId: `err_${Date.now()}`,
-            message: errorMsg,
-            provenance: { question: inputToUse, planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
-          });
-          setAnalyticalContext(null);
+          if (runId === latestQuestionRunIdRef.current) {
+            setQaResponse({
+              status: 'error',
+              debugId: `err_${Date.now()}`,
+              message: errorMsg,
+              provenance: { question: inputToUse, planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
+            });
+            setAnalyticalContext(null);
+          }
           
           // Wire store actions to inject error details into workspace
           useWorkspaceStore.getState().commitAnalyticalSnapshotError(inputToUse, errorMsg);
         } finally {
-          setQaLoading(false);
+          if (runId === latestQuestionRunIdRef.current) {
+            setQaLoading(false);
+          }
         }
       };
       
@@ -1139,13 +1156,17 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             rows,
             profile,
             bypassMetadataCheck: false,
+            runId
           };
           
           const result = await runAnalyticsQuestion(inputToUse, context);
           
-          setQaResponse(result);
-          setAnalyticalContext(null);
-          setIsFilterQueryActive(false);
+          const isStale = runId !== latestQuestionRunIdRef.current;
+          if (!isStale) {
+            setQaResponse(result);
+            setAnalyticalContext(null);
+            setIsFilterQueryActive(false);
+          }
 
           // Save query to history
           if (ws && result.status !== 'error') {
@@ -1168,15 +1189,19 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           }
         } catch (err: any) {
           console.error('Error in fallback analytics pipeline:', err);
-          setQaResponse({
-            status: 'error',
-            debugId: `err_${Date.now()}`,
-            message: err.message || 'An unexpected error occurred in the analytics pipeline.',
-            provenance: { question: inputToUse, planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
-          });
-          setAnalyticalContext(null);
+          if (runId === latestQuestionRunIdRef.current) {
+            setQaResponse({
+              status: 'error',
+              debugId: `err_${Date.now()}`,
+              message: err.message || 'An unexpected error occurred in the analytics pipeline.',
+              provenance: { question: inputToUse, planGeneratedAt: new Date(), executionTimeMs: 0, plannerAttempts: 1 }
+            });
+            setAnalyticalContext(null);
+          }
         } finally {
-          setQaLoading(false);
+          if (runId === latestQuestionRunIdRef.current) {
+            setQaLoading(false);
+          }
         }
       };
 
@@ -1202,6 +1227,9 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     const currentInput = chatInput;
     setChatInput('');
     setChatLoading(true);
+
+    const chatRunId = useCockpitStore.getState().startNewRun();
+    latestQuestionRunIdRef.current = chatRunId;
 
     setTimeout(() => {
       const query = currentInput.toLowerCase();
@@ -1312,6 +1340,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
               rows,
               profile,
               bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
+              runId: chatRunId
             };
 
             const result = await runAnalyticsQuestion(currentInput, context);
@@ -1323,8 +1352,11 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
               console.error('Failed to log evaluation run:', logErr);
             }
 
-            setQaResponse(result);
-            setAnalyticalContext(null);
+            const isStale = chatRunId !== latestQuestionRunIdRef.current;
+            if (!isStale) {
+              setQaResponse(result);
+              setAnalyticalContext(null);
+            }
 
             // Add snapshot to workspace store
             useWorkspaceStore.getState().addAnalyticalSnapshot(currentInput, result);
@@ -1350,7 +1382,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             }
 
             // Contextual card injection (Phase 3 sheet matching)
-            if ((result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
+            if (!isStale && (result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
               try {
                 const visualContract = mapToVisualContract(result);
                 const targetSheetId = matchResultToSheet(result, activeWorkspace);
@@ -1415,7 +1447,9 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
               timestamp: new Date()
             }]);
           } finally {
-            setChatLoading(false);
+            if (chatRunId === latestQuestionRunIdRef.current) {
+              setChatLoading(false);
+            }
           }
         };
 

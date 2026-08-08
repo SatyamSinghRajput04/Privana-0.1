@@ -108,12 +108,6 @@ export const SlotResolver = {
       }
       if (categorical) {
         result.groupBy = [categorical.columnName];
-      } else {
-        // Fallback: if no explicit categorical is found but there's a second column, use it
-        const fallbackCat = availableCols.find(c => c.columnName !== numeric?.columnName);
-        if (fallbackCat) {
-          result.groupBy = [fallbackCat.columnName];
-        }
       }
     } else if (intent === 'ranking') {
       // Ranking needs a metric and a group

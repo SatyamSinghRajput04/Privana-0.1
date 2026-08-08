@@ -58,6 +58,16 @@ export const PlanValidator = {
       if (!plan.metric) {
         errors.push('Grouped average analysis requires a numeric metric.');
       }
+      if (!plan.groupBy || plan.groupBy.length === 0) {
+        errors.push('Grouped average analysis requires a categorical grouping column.');
+      }
+    } else if (plan.intent === 'comparison') {
+      if (!plan.metric) {
+        errors.push('Comparison analysis requires a numeric metric.');
+      }
+      if (!plan.groupBy || plan.groupBy.length === 0) {
+        errors.push('Comparison analysis requires a categorical grouping column.');
+      }
     }
 
     return errors;

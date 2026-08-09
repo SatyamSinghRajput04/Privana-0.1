@@ -421,38 +421,34 @@ const PremiumNarrativePanel: React.FC<{ text: string; provenance?: any }> = ({ t
 
 export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   const [showConsole, setShowConsole] = React.useState(false);
-  const { 
-    cacheHitRate, 
-    totalRuns, 
-    lastRunDurationMs, 
-    telemetryLogs, 
-    performanceBadge,
-    committedVisual,
-    committedPlanId
-  } = useCockpitStore();
+  const cacheHitRate = useCockpitStore(s => s.cacheHitRate);
+  const totalRuns = useCockpitStore(s => s.totalRuns);
+  const lastRunDurationMs = useCockpitStore(s => s.lastRunDurationMs);
+  const telemetryLogs = useCockpitStore(s => s.telemetryLogs);
+  const performanceBadge = useCockpitStore(s => s.performanceBadge);
+  const committedVisual = useCockpitStore(s => s.committedVisual);
+  const committedPlanId = useCockpitStore(s => s.committedPlanId);
 
   // Ownership guard: only consume the global committed visual if it belongs
   // to this panel's planId. Without this, every panel renders the same chart.
   const myPlanId = result?.plan?.planId ?? null;
   const ownsCommitted = !!(committedVisual && committedPlanId && myPlanId === committedPlanId);
 
-  const {
-    workspacePipelineEnabled,
-    activeWorkspace,
-    activeSheetId,
-    workspaceResults,
-    workspaceErrors,
-    isWorkspaceInFlight,
-    setActiveSheetId,
-    setWorkspaceInFlight,
-    contextualCard,
-  } = useWorkspaceStore();
+  const workspacePipelineEnabled = useWorkspaceStore(s => s.workspacePipelineEnabled);
+  const activeWorkspace = useWorkspaceStore(s => s.activeWorkspace);
+  const activeSheetId = useWorkspaceStore(s => s.activeSheetId);
+  const workspaceResults = useWorkspaceStore(s => s.workspaceResults);
+  const workspaceErrors = useWorkspaceStore(s => s.workspaceErrors);
+  const isWorkspaceInFlight = useWorkspaceStore(s => s.isWorkspaceInFlight);
+  const setActiveSheetId = useWorkspaceStore(s => s.setActiveSheetId);
+  const setWorkspaceInFlight = useWorkspaceStore(s => s.setWorkspaceInFlight);
+  const contextualCard = useWorkspaceStore(s => s.contextualCard);
 
   const memoryInfo = React.useMemo(() => {
     let bytes = 12.5 * 1024 * 1024; // default baseline of 12.5MB
-    if (committedVisual && (committedVisual as any).data) {
-      const dataStr = JSON.stringify((committedVisual as any).data);
-      bytes += dataStr.length * 2;
+    if (committedVisual && (committedVisual as any).data && Array.isArray((committedVisual as any).data)) {
+      const dataLen = (committedVisual as any).data.length;
+      bytes += dataLen * 128;
     }
     const mb = bytes / (1024 * 1024);
     return {

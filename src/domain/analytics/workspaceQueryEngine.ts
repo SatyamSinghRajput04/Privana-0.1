@@ -239,6 +239,8 @@ export const executeWorkspaceActiveTab = async (
   const tbl = getSqlTableName(datasetName);
   const { where, params } = compileFiltersToSQL(datasetName, filterContext);
 
+  const sheetResultsMap: Record<string, VisualContract> = {};
+
   // Parallel loop over all active sheet cards
   await Promise.all(
     currentSheet.cards.map(async (card) => {
@@ -258,7 +260,7 @@ export const executeWorkspaceActiveTab = async (
         deepFreeze(contract);
         
         if (cockpit.currentRunId === runId) {
-          store.commitCardResult(activeSheetId, card.id, contract);
+          sheetResultsMap[card.id] = contract;
         }
       } catch (err: any) {
         console.error(`Execution error for card ${card.id}:`, err);
@@ -268,6 +270,10 @@ export const executeWorkspaceActiveTab = async (
       }
     })
   );
+
+  if (cockpit.currentRunId === runId && Object.keys(sheetResultsMap).length > 0) {
+    store.commitSheetResults(activeSheetId, sheetResultsMap);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

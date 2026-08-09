@@ -17,7 +17,8 @@ export type StatisticalMethod =
   | 'Chi-Square';
 
 export function profileColumn(name: string, rows: any[]): ColumnProfile {
-  const sampleSize = rows.length;
+  const sampleRows = rows.length > 2000 ? rows.slice(0, 2000) : rows;
+  const sampleSize = sampleRows.length;
   let missingCount = 0;
   const uniqueSet = new Set<any>();
   let numericValids = 0;
@@ -27,7 +28,7 @@ export function profileColumn(name: string, rows: any[]): ColumnProfile {
   const nameLower = name.toLowerCase();
   const isPIIName = /email|phone|phone_number|mobile|ssn|aadhaar|pan_card|passport|first_name|last_name|fullname|username|address|ip_address|password|secret|key|token/.test(nameLower);
 
-  rows.forEach(r => {
+  sampleRows.forEach(r => {
     const val = r[name];
     if (val === null || val === undefined || val === '') {
       missingCount++;

@@ -37,6 +37,7 @@ interface WorkspaceStore {
   setWorkspaceBlueprint: (blueprint: WorkspaceBlueprint | null) => void;
   setActiveSheetId: (sheetId: string | null) => void;
   commitCardResult: (sheetId: string, cardId: string, result: VisualContract) => void;
+  commitSheetResults: (sheetId: string, resultsMap: Record<string, VisualContract>) => void;
   commitCardError: (sheetId: string, cardId: string, error: string) => void;
   setWorkspaceInFlight: (inFlight: boolean) => void;
   
@@ -98,6 +99,30 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
     if (nextErrors[sheetId]) {
       const copy = { ...nextErrors[sheetId] };
       delete copy[cardId];
+      nextErrors[sheetId] = copy;
+    }
+
+    return {
+      workspaceResults: nextResults,
+      workspaceErrors: nextErrors
+    };
+  }),
+
+  commitSheetResults: (sheetId, resultsMap) => set((state) => {
+    const nextResults = { ...state.workspaceResults };
+    const currentSheetResults = { ...(nextResults[sheetId] || {}) };
+    const now = Date.now();
+    for (const [cardId, result] of Object.entries(resultsMap)) {
+      currentSheetResults[cardId] = { ...result, lastComputedAt: now };
+    }
+    nextResults[sheetId] = currentSheetResults;
+
+    const nextErrors = { ...state.workspaceErrors };
+    if (nextErrors[sheetId]) {
+      const copy = { ...nextErrors[sheetId] };
+      for (const cardId of Object.keys(resultsMap)) {
+        delete copy[cardId];
+      }
       nextErrors[sheetId] = copy;
     }
 

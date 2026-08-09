@@ -503,12 +503,24 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
 
     if (workspacePipelineEnabled) {
       try {
-        const tableName = selectedDataset.name;
-        const tbl = getSqlTableName(tableName);
-        if (!isTableLoaded(tableName)) return [];
-        const rows = executeSQL(`SELECT * FROM ${tbl}`);
-        const profile = DatasetValidator.profile(rows, tableName);
-        const questions = SchemaIntelligence.suggestQuestions(profile);
+        const profile = {
+          datasetHash: selectedDataset.name,
+          rowCount: selectedDataset.row_count || 1000,
+          columnCount: columnsList.length,
+          shape: 'tabular' as const,
+          columns: columnsList.map(c => ({
+            name: c.name,
+            type: c.type === 'number' ? 'numeric' : c.type === 'date' ? 'date' : 'text',
+            nullable: false,
+            role: c.type === 'number' ? 'metric' : 'dimension',
+            nullCount: 0
+          })),
+          qualityMetrics: { missingValuesPct: 0, duplicatesCount: 0, criticalIssuesCount: 0, criticalIssues: [] },
+          piiFlags: [],
+          profiledAt: '',
+          profilerVersion: '1.0.0'
+        };
+        const questions = SchemaIntelligence.suggestQuestions(profile as any);
         return questions.map((q: string, idx: number) => ({
           title: `💡 Suggested Query ${idx + 1}`,
           desc: q,

@@ -281,12 +281,14 @@ export function loadCSV(
       header: true,
       dynamicTyping: true,
       skipEmptyLines: true,
-      step: (results) => {
-        const row = results.data as any;
-        rows.push(row);
-        if (onProgress && totalBytes > 0) {
-          bytesSeen = Math.min(totalBytes, bytesSeen + CHUNK_SIZE);
-          onProgress(bytesSeen / totalBytes);
+      chunk: (results) => {
+        if (results.data && Array.isArray(results.data)) {
+          for (let i = 0; i < results.data.length; i++) {
+            rows.push(results.data[i]);
+          }
+        }
+        if (onProgress && totalBytes > 0 && results.meta && typeof results.meta.cursor === 'number') {
+          onProgress(Math.min(1, results.meta.cursor / totalBytes));
         }
       },
       complete: () => {

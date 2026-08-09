@@ -37,6 +37,10 @@ export function AnalyticsTable({ rows, maxRows = 200 }: Props) {
       }));
   }, [rows]);
 
+  const displayRows = useMemo(() => {
+    return rows ? rows.slice(0, maxRows) : [];
+  }, [rows, maxRows]);
+
   // Find stats for inline spark-bars (handling negative values)
   const colStats = useMemo(() => {
     const stats: Record<string, { maxAbs: number; hasNegative: boolean }> = {};
@@ -44,7 +48,7 @@ export function AnalyticsTable({ rows, maxRows = 200 }: Props) {
       if (col.isNumeric) {
         let maxAbs = 0.0001;
         let hasNegative = false;
-        rows.forEach(r => {
+        displayRows.forEach(r => {
           const v = Number(r[col.key]);
           if (!isNaN(v)) {
             const absV = Math.abs(v);
@@ -56,12 +60,11 @@ export function AnalyticsTable({ rows, maxRows = 200 }: Props) {
       }
     });
     return stats;
-  }, [columns, rows]);
+  }, [columns, displayRows]);
 
   const sorted = useMemo(() => {
-    const slice = rows.slice(0, maxRows);
-    if (!sortKey) return slice;
-    return [...slice].sort((a, b) => {
+    if (!sortKey) return displayRows;
+    return [...displayRows].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
       

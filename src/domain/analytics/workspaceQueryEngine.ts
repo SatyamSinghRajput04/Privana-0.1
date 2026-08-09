@@ -27,8 +27,8 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
 
   const isFreeTextOrIdCol = (name: string): boolean => {
     const n = name.toLowerCase();
-    if (n === 'id' || n.endsWith('_id') || n.endsWith('id') || n.endsWith('_uuid') || n.endsWith('_hash') || n.endsWith('_key')) return true;
-    if (n.includes('comment') || n.includes('message') || n.includes('description') || n.includes('text') || n.includes('title') || n.includes('body') || n.includes('note') || n.includes('date') || n.includes('time')) return true;
+    if (n === 'id' || n.endsWith('_id') || n.endsWith('id') || n.endsWith('_uuid') || n.endsWith('_hash') || n.endsWith('_key') || n.endsWith('_code') || n.endsWith('_num') || n.endsWith('_number')) return true;
+    if (n.includes('comment') || n.includes('message') || n.includes('description') || n.includes('text') || n.includes('title') || n.includes('body') || n.includes('note') || n.includes('date') || n.includes('time') || n.includes('timestamp') || n.endsWith('_at') || n.endsWith('at') || n.endsWith('_dt') || n.endsWith('dt')) return true;
     return false;
   };
 
@@ -37,7 +37,12 @@ export const planWorkspace = (datasetName: string, columns: any[]): WorkspaceBlu
   const activeNumericCols = numericCols.length > 0 ? numericCols : (rawNumericCols.length > 0 ? rawNumericCols : columns);
 
   const rawCategoryCols = columns.filter(c => c.type === 'text' || c.type === 'string' || c.type === 'category' || c.type === 'boolean');
-  const categoryCols = rawCategoryCols.filter(c => !isFreeTextOrIdCol(c.name));
+  const categoryCols = rawCategoryCols.filter(c => {
+    if (isFreeTextOrIdCol(c.name)) return false;
+    const profileCol = profileContract.columns?.find((pc: any) => pc.name === c.name);
+    if (profileCol && profileCol.cardinality !== undefined && profileCol.cardinality > 50) return false;
+    return true;
+  });
   
   // Safe category selection: NEVER select a high-cardinality ID/UUID column for grouping
   const validCategory = categoryCols[0]?.name;

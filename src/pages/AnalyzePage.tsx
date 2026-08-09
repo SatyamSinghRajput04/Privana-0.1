@@ -1564,7 +1564,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     try {
       const names = schema.map(c => c.name.toLowerCase());
       if (names.includes('gender') && names.includes('platform_usage')) {
-        const fullRows = executeSQL(`SELECT * FROM ${tbl}`);
+        const fullRows = executeSQL(`SELECT gender, platform_usage FROM ${tbl}`);
         
         let maleC = 0, femaleC = 0;
         let instaC = 0, tiktokC = 0, ytC = 0, snapC = 0, twitC = 0;

@@ -18,19 +18,22 @@ export const ComparisonExecutor = {
     }
 
     const groupKeyCol = groupBy[0];
-    const groupStats: Record<string, number[]> = {};
+    const groupStats: Record<string, { sum: number; count: number; min: number; max: number }> = {};
 
-    for (const r of rows) {
-      const gVal = r[groupKeyCol];
-      const mVal = Number(r[metric]);
+    for (let i = 0; i < rows.length; i++) {
+      const gVal = rows[i][groupKeyCol];
+      const mVal = Number(rows[i][metric]);
 
       if (gVal === null || gVal === undefined || isNaN(mVal)) continue;
 
       const key = String(gVal);
       if (!groupStats[key]) {
-        groupStats[key] = [];
+        groupStats[key] = { sum: 0, count: 0, min: Infinity, max: -Infinity };
       }
-      groupStats[key].push(mVal);
+      groupStats[key].sum += mVal;
+      groupStats[key].count++;
+      if (mVal < groupStats[key].min) groupStats[key].min = mVal;
+      if (mVal > groupStats[key].max) groupStats[key].max = mVal;
     }
 
     // Filter comparison groups if filters are specified for the groupBy column
@@ -48,19 +51,14 @@ export const ComparisonExecutor = {
         if (allowedGroupVals.size === 0) return true;
         return allowedGroupVals.has(groupVal.toLowerCase());
       })
-      .map(([groupVal, vals]) => {
-        const sorted = [...vals].sort((a, b) => a - b);
-        const sum = vals.reduce((a, b) => a + b, 0);
-        const mean = sum / vals.length;
-        const min = sorted[0];
-        const max = sorted[sorted.length - 1];
-
+      .map(([groupVal, stats]) => {
+        const mean = stats.sum / stats.count;
         return {
           group_label: groupVal,
           mean,
-          count: vals.length,
-          min,
-          max,
+          count: stats.count,
+          min: stats.min,
+          max: stats.max,
         };
       });
 

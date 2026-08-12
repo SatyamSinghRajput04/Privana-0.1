@@ -17,32 +17,38 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({
 }) => {
   const getSuggestions = () => {
     if (!selectedDataset) return [];
-    const cols = selectedDataset.columns_meta || [];
-    const names = cols.map((c: any) => c.name.toLowerCase());
+    
+    // Attempt to use SchemaIntelligence for dynamic suggestions
+    const columns = selectedDataset.columns_meta || [];
+    const profile = { name: selectedDataset.name, columns: columns, type: selectedDataset.file_type || 'csv', size: selectedDataset.size_bytes || 0, rowCount: selectedDataset.row_count || 0 };
+    
+    // We import SchemaIntelligence locally to avoid circular dependency if any, 
+    // but ideally we should import it at the top. Let's assume it's imported at the top.
+    // For now, we will just generate generic suggestions directly here if we don't have it imported.
+    const numCols = columns.filter((c: any) => c.type === 'number').map((c: any) => c.name);
+    const catCols = columns.filter((c: any) => c.type === 'string' || c.type === 'category' || c.type === 'boolean').map((c: any) => c.name);
     
     const suggs: string[] = [];
-    if (names.includes('sleep_hours') && names.includes('gender')) {
-      suggs.push("What is the average sleep_hours by gender?");
-    }
-    if (names.includes('stress_level') && names.includes('gender')) {
-      suggs.push("Compare stress_level across gender");
-    }
-    if (names.includes('daily_social_media_hours') && names.includes('anxiety_level')) {
-      suggs.push("Show daily_social_media_hours vs anxiety_level correlation");
-    }
-    if (names.includes('depression_label')) {
-      suggs.push("What is the distribution of depression_label?");
+    
+    // Dynamically build suggestions based on actual columns
+    if (numCols.length > 0 && catCols.length > 0) {
+      suggs.push(`What is the average ${numCols[0]} by ${catCols[0]}?`);
     }
     
-    if (suggs.length < 3) {
-      const numCols = cols.filter((c: any) => c.type === 'number').map((c: any) => c.name);
-      const catCols = cols.filter((c: any) => c.type === 'string' || c.type === 'category').map((c: any) => c.name);
-      if (numCols.length > 0 && catCols.length > 0) {
-        suggs.push(`Show average ${numCols[0]} by ${catCols[0]}`);
-      }
-      if (numCols.length >= 2) {
-        suggs.push(`Correlation between ${numCols[0]} and ${numCols[1]}`);
-      }
+    if (catCols.length >= 2) {
+      suggs.push(`Compare ${catCols[0]} across ${catCols[1]}`);
+    }
+    
+    if (numCols.length >= 2) {
+      suggs.push(`Show ${numCols[0]} vs ${numCols[1]} correlation`);
+    }
+    
+    if (catCols.length > 0) {
+      suggs.push(`What is the distribution of ${catCols[catCols.length > 1 ? 1 : 0]}?`);
+    }
+    
+    if (numCols.length > 0 && catCols.length > 1) {
+      suggs.push(`Show average ${numCols[numCols.length > 1 ? 1 : 0]} by ${catCols[1]}`);
     }
     
     return suggs.slice(0, 4);

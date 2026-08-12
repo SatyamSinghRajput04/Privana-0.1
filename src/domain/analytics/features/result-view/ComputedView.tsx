@@ -303,18 +303,22 @@ const PremiumCircularGauge: React.FC<{ value: string | number; sub?: string }> =
 
 const PremiumNarrativePanel: React.FC<{ text: string; provenance?: any }> = ({ text }) => {
   const highlightTakeaways = (sentence: string) => {
-    // Highlight numbers, column names, and common key words
+    // Highlight based on Markdown **bold** syntax injected by the facts compiler
+    // and standalone numbers
     const formatted = sentence.replace(
-      /(\b\d+(?:\.\d+)?\b)|(\b(?:TikTok|Instagram|YouTube|Snapchat|Twitter|Male|Female|High|Medium|Low|Mild|Moderate|Severe|Both)\b)|(\b[a-z0-9_]+_level\b|\b[a-z0-9_]+_label\b|\b[a-z0-9_]+_hours\b|\b[a-z0-9_]+_usage\b)/gi,
-      (match, p1, p2, p3) => {
-        if (p1) {
-          return `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">${p1}</span>`;
+      /(\*\*[^*]+\*\*)|(\b\d+(?:\.\d+)?\b)/gi,
+      (match, boldMatch, numMatch) => {
+        if (boldMatch) {
+          const innerText = boldMatch.slice(2, -2);
+          // If the bolded text is a number
+          if (/^\d+(?:\.\d+)?$/.test(innerText)) {
+            return `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">${innerText}</span>`;
+          }
+          // Otherwise, it's a category or column name
+          return `<span class="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 font-bold text-[9px]">${innerText.replace(/_/g, ' ')}</span>`;
         }
-        if (p2) {
-          return `<span class="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/25 text-amber-400 font-bold text-[9px]">${p2}</span>`;
-        }
-        if (p3) {
-          return `<span class="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 font-mono text-[8px]">${p3.replace(/_/g, ' ')}</span>`;
+        if (numMatch) {
+           return `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">${numMatch}</span>`;
         }
         return match;
       }
@@ -322,8 +326,8 @@ const PremiumNarrativePanel: React.FC<{ text: string; provenance?: any }> = ({ t
     return <span dangerouslySetInnerHTML={{ __html: formatted }} />;
   };
 
-  // Clean all markdown asterisks from the text to prevent literal asterisks displaying around highlighted badges
-  const cleanedText = text.replace(/\*\*/g, '').replace(/\*/g, '');
+  // We do not strip asterisks anymore because highlightTakeaways processes them.
+  const cleanedText = text;
 
   const paragraphs = cleanedText
     .split(/\n+/)

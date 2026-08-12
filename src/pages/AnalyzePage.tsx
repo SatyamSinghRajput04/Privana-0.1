@@ -7,7 +7,7 @@ import {
   ScatterChart, Scatter, ZAxis, ComposedChart, ReferenceLine
 } from 'recharts';
 import type { Page } from '../App';
-import { executeSQL, getSqlTableName, getTableSchema, getTableOwner, getTableRowCount, isTableLoaded, loadCSV, loadJSON, setTableOwner } from '../lib/sqlEngine';
+import { executeSQL, getSqlTableName, getTableSchema, getTableOwner, getTableRowCount, isTableLoaded, loadCSV, loadJSON, setTableOwner, getTableData, getTableRows } from '../lib/sqlEngine';
 import { validateDatasetSafety } from '../domain/safeCompute/preflight';
 import { runSafeCompute } from '../domain/safeCompute';
 import { ExcludedFeature } from '../domain/safeCompute/types';
@@ -24,6 +24,7 @@ import {
 import { isFlagOn } from '../lib/flags';
 import { DatasetValidator } from '../domain/validator/validator';
 import { SchemaIntelligence } from '../domain/analytics/schemaIntelligence';
+import { SchemaAnalyzer } from '../domain/analytics/schemaAnalyzer';
 import { runAnalyticsQuestion } from '../domain/analytics/runAnalyticsQuestion';
 import { ResultView } from '../domain/analytics/features/result-view/ResultView';
 import { PlanPreview } from '../domain/analytics/features/plan-preview/PlanPreview';
@@ -470,12 +471,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     Twitter: number;
   }>({ male: 0, female: 0, Instagram: 0, TikTok: 0, YouTube: 0, Snapchat: 0, Twitter: 0 });
 
-  const isMentalHealthSchema = useMemo(() => {
-    if (!columnsList.length) return false;
-    const names = columnsList.map(c => c.name.toLowerCase());
-    return names.includes('sleep_hours') && names.includes('gender') && names.includes('age');
-  }, [columnsList]);
-
+  const isMentalHealthSchema = false;
   const compileCockpitFilters = (): any[] => {
     const list: any[] = [];
     if (isMentalHealthSchema) {
@@ -658,7 +654,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         query: `Show the frequency distribution histogram of ${yCol}`
       }
     ];
-  }, [columnsList, isMentalHealthSchema, selectedDataset]);
+  }, [columnsList, selectedDataset]);
 
   const handleRunPresetQuestion = (questionText: string) => {
     setQaInput(questionText);
@@ -765,8 +761,8 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
   const triggerCardHighlight = (card: string) => {
     setHighlightedCard(card);
     const cardTitle = card === 'bar' ? 'Average Sleep Hours' 
-                    : card === 'donut' ? 'Platform Share' 
-                    : card === 'line' ? 'Screen Time vs Stress' 
+                    : card === 'donut' ? 'Category Distribution' 
+                    : card === 'line' ? 'Metric Correlation' 
                     : 'Gender Summary Report';
     showToast(`Focused on: ${cardTitle}`);
     setTimeout(() => setHighlightedCard(null), 1500);
@@ -1023,14 +1019,18 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage. Please re-upload this file on the Datasets page to enable analysis.`);
           }
           const tableName = selectedDataset.name;
-          const tbl = getSqlTableName(tableName);
-          const rows = executeSQL(`SELECT * FROM ${tbl}`);
+          // Yield one frame so the "Processing..." UI paints before the
+          // (synchronous, main-thread) analytics pipeline runs below.
+          await new Promise(r => setTimeout(r, 0));
+          const rows = getTableRows(tableName);
+          const totalRowCount = getTableRowCount(tableName);
           const profile = DatasetValidator.profile(rows, tableName);
           
           const context = {
             tableName,
             rows,
             profile,
+            totalRowCount,
             bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
             runId
           };
@@ -1160,14 +1160,18 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage. Please re-upload this file on the Datasets page to enable analysis.`);
           }
           const tableName = selectedDataset.name;
-          const tbl = getSqlTableName(tableName);
-          const rows = executeSQL(`SELECT * FROM ${tbl}`);
+          // Yield one frame so the "Processing..." UI paints before the
+          // (synchronous, main-thread) analytics pipeline runs below.
+          await new Promise(r => setTimeout(r, 0));
+          const rows = getTableRows(tableName);
+          const totalRowCount = getTableRowCount(tableName);
           const profile = DatasetValidator.profile(rows, tableName);
           
           const context = {
             tableName,
             rows,
             profile,
+            totalRowCount,
             bypassMetadataCheck: false,
             runId
           };
@@ -1345,13 +1349,17 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
               throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage. Please re-upload this file on the Datasets page to enable analysis.`);
             }
             const tableName = selectedDataset.name;
-            const tbl = getSqlTableName(tableName);
-            const rows = executeSQL(`SELECT * FROM ${tbl}`);
+            // Yield one frame so the "Processing..." UI paints before the
+            // (synchronous, main-thread) analytics pipeline runs below.
+            await new Promise(r => setTimeout(r, 0));
+            const rows = getTableRows(tableName);
+            const totalRowCount = getTableRowCount(tableName);
             const profile = DatasetValidator.profile(rows, tableName);
             const context = {
               tableName,
               rows,
               profile,
+              totalRowCount,
               bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
               runId: chatRunId
             };
@@ -1632,7 +1640,13 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
       // Fetch filtered rows — for large datasets (> 5,000 rows), use a representative
       // sample for fast baseline UI previews to prevent main-thread freezing.
       const totalCount = getTableRowCount(tableName);
-      const allRows = executeSQL(`SELECT * FROM ${tbl} ${whereSQL} LIMIT ${totalCount > 10000 ? 5000 : 100000}`);
+      
+      // Bypass executeSQL if no filters are applied to prevent AlaSQL from full-scanning/cloning large tables
+      const rawData = whereSQL 
+        ? executeSQL(`SELECT * FROM ${tbl} ${whereSQL} LIMIT ${totalCount > 10000 ? 5000 : 100000}`) 
+        : getTableData(tableName) || [];
+        
+      const allRows = Array.isArray(rawData) ? rawData : [];
       const sampleRows = allRows.length > 5000 ? allRows.slice(0, 5000) : allRows;
 
       if (isMentalHealthSchema) {
@@ -1746,7 +1760,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         }
         setGenderSummaryTable(tableData);
 
-        // --- Top Anxiety Levels (Horizontal Bar) ---
+        // --- Top Category Counts (Horizontal Bar) ---
         const anxietyCounts = { Low: 0, Mild: 0, Moderate: 0, High: 0, Severe: 0 };
         allRows.forEach(r => {
           const val = Number(r.anxiety_level || 0);
@@ -1764,17 +1778,17 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
         setAnxietyLevelsData(sortedAnxiety);
       } else {
         // --- ADAPTIVE GENERIC SYSTEM (For non-Teen dataset files) ---
-        const isIdCol = (n: string) => {
-          const lower = n.toLowerCase();
-          return lower === 'id' || lower.endsWith('_id') || lower.endsWith('id') || lower.endsWith('_uuid') || lower.endsWith('_hash') || lower.endsWith('_key');
-        };
-
-        const numCols = schema.filter(c => c.type === 'number');
-        const strCols = schema.filter(c => c.type === 'string' && !isIdCol(c.name));
-
-        const groupCol = strCols[0]?.name;
-        const valCol = numCols[0]?.name;
-        const valCol2 = numCols[1]?.name;
+        // Dynamically compute profiles and scores
+        const profiles = SchemaAnalyzer.analyzeSchema(sampleRows);
+        
+        // Pick the best metric columns
+        const metricCols = [...profiles].sort((a, b) => b.metricScore - a.metricScore);
+        const valCol = metricCols.find(c => c.metricScore > 0)?.name;
+        const valCol2 = metricCols.filter(c => c.metricScore > 0 && c.name !== valCol)[0]?.name;
+        
+        // Pick the best grouping columns
+        const groupCols = [...profiles].sort((a, b) => b.groupingScore - a.groupingScore);
+        const groupCol = groupCols.find(c => c.groupingScore > 0)?.name;
 
         const count = totalCount || allRows.length;
         let sleepSum = 0;
@@ -1846,7 +1860,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     } catch (e) {
       console.error('Calculation failure:', e);
     }
-  }, [selectedDataset, genderFilter, platformFilter, ageRange, isMentalHealthSchema, tableLoadedState, page]);
+  }, [selectedDataset, genderFilter, platformFilter, ageRange, tableLoadedState, page]);
 
   // Trigger workspace tab execution when active tab or filters change
   // Dedup guard: skip re-execution when the dep array fires but the actual
@@ -2985,7 +2999,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                           </div>
                         ))
                       : /* Default MH KPI cards â€” or generic for non-MH datasets */
-                        isMentalHealthSchema && kpis.records > 0
+                        kpis.records > 0
                           ? [
                             { icon: <Moon size={16} />, label: 'AVG SLEEP HOURS', value: kpis.sleep, sub: 'hrs · per night average', color: '#eab308' },
                             { icon: <Users size={16} />, label: 'AVG AGE', value: kpis.age, sub: 'years · from dataset', color: '#3b82f6' },
@@ -3025,7 +3039,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                   </div>
 
                   {/* â”€â”€ Row 1: Primary Chart + Right Column â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                  {(analyticalContext || isMentalHealthSchema) ? (
+                  {true ? (
                     <div style={{ display: 'grid', gridTemplateColumns: analyticalContext ? '1.6fr 1fr' : '1.2fr 1fr', gap: '0.6rem', flexShrink: 0 }}>
 
                       {/* PRIMARY CHART */}
@@ -3163,9 +3177,9 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                               </BarChart>
                             </ResponsiveContainer>
                           </>
-                        ) : /* Default: Average Sleep Hours by Gender (MH) or idle placeholder */ isMentalHealthSchema && genderSleepData.length > 0 ? (
+                        ) : /* Default: Primary Metric by Category (MH) or idle placeholder */ genderSleepData.length > 0 ? (
                           <>
-                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.6rem' }}>Average Sleep Hours by Gender</div>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.6rem' }}>Primary Metric by Category</div>
                             <ResponsiveContainer width="100%" height={220}>
                               <BarChart data={genderSleepData} margin={{ top: 15, right: 10, left: -25, bottom: 0 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#1f1f23" />
@@ -3262,7 +3276,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                                 </div>
                               )}
                             </div>
-                          ) : isMentalHealthSchema && platformShareData.length > 0 ? (
+                          ) : platformShareData.length > 0 ? (
                             <>
                               <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.4rem' }}>Platform Usage Share</div>
                               <div style={{ display: 'flex', alignItems: 'center', height: 120, position: 'relative' }}>
@@ -3382,9 +3396,9 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                                 </div>
                               )}
                             </div>
-                          ) : isMentalHealthSchema && screenTimeStressData.length > 0 ? (
+                          ) : screenTimeStressData.length > 0 ? (
                             <>
-                              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.4rem' }}>Screen Time vs Stress</div>
+                              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.4rem' }}>Metric Correlation</div>
                               <ResponsiveContainer width="100%" height={120}>
                                 <LineChart data={screenTimeStressData} margin={{ top: 5, right: 5, bottom: 5, left: -25 }}>
                                   <CartesianGrid strokeDasharray="3 3" stroke="#1f1f23" />
@@ -3454,7 +3468,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                   )}
 
                   {/* â”€â”€ Row 2: Bottom Three Panels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                  {(analyticalContext || isMentalHealthSchema) && (
+                  {true && (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.95fr 1fr', gap: '0.6rem', flexShrink: 0 }}>
 
                       {/* BOTTOM LEFT */}
@@ -3485,7 +3499,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                               </tbody>
                             </table>
                           </>
-                        ) : isMentalHealthSchema && screenTimeStressData.length > 0 ? (
+                        ) : screenTimeStressData.length > 0 ? (
                           <>
                             <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.6rem' }}>Screen Time Before Sleep vs Stress</div>
                             <div style={{ width: '100%', height: 145 }}>
@@ -3555,7 +3569,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
                           </>
                         ) : anxietyLevelsData.length > 0 ? (
                           <>
-                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.6rem' }}>Top Anxiety Levels</div>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e4e4e7', marginBottom: '0.6rem' }}>Top Category Counts</div>
                             <div style={{ width: '100%', height: 145 }}>
                               <ResponsiveContainer>
                                 <BarChart data={anxietyLevelsData} layout="vertical" margin={{ top: 5, right: 20, left: -25, bottom: 0 }}>
@@ -3703,7 +3717,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           }}>
             
             {/* Header (Segmented Tabs Switcher if Mental Health dataset is active) */}
-            {isMentalHealthSchema ? (
+            {false ? (
               <div style={{
                 display: 'flex',
                 background: '#121215',
@@ -3762,7 +3776,7 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
               </div>
             )}
 
-            {(!isMentalHealthSchema || activeRightTab === 'fields') ? (
+            {true ? (
               <DatasetProfilePanel
                 selectedDataset={selectedDataset}
                 columnsList={columnsList}

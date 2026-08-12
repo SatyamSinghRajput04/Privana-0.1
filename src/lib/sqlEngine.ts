@@ -166,12 +166,12 @@ export function normalizeAndProfileData(tableName: string, data: any[], rawConte
     let role: ColumnSpec['role'] = 'unknown';
 
     if (nonNullCount > 0) {
-      const numbers = sampleValues.filter(v => typeof v === 'number');
-      const booleans = sampleValues.filter(v => typeof v === 'boolean');
+      const numbers = sampleValues.filter(v => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))));
+      const booleans = sampleValues.filter(v => typeof v === 'boolean' || (typeof v === 'string' && ['true', 'false'].includes(v.trim().toLowerCase())));
       const dates = sampleValues.filter(v => typeof v === 'string' && (datePattern.test(v) || dateTimePattern.test(v) || v.endsWith('Z')));
 
       if (numbers.length > nonNullCount * 0.7) {
-        const isAllInt = numbers.every(n => Number.isInteger(n));
+        const isAllInt = numbers.every(n => Number.isInteger(typeof n === 'number' ? n : Number(n)));
         inferredType = isAllInt ? 'integer' : 'number';
         role = 'metric';
       } else if (booleans.length > nonNullCount * 0.7) {
@@ -275,13 +275,35 @@ export function loadCSV(
     const rows: any[] = [];
     let bytesSeen = 0;
     const CHUNK_SIZE = 1024 * 1024;
+    let settled = false;
+
+    // Hard safety-net timeout: a worker-based parse can hang forever with no
+    // callback at all if Web Worker creation (blob: URL) is blocked by the
+    // hosting page's CSP or a sandboxed preview iframe — the exact "stuck at
+    // Processing locally... 0%" freeze. Never let the UI hang indefinitely.
+    const HARD_TIMEOUT_MS = 90_000;
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(
+        `Parsing "${filename}" timed out after ${HARD_TIMEOUT_MS / 1000}s with no progress. ` +
+        `This usually means background parsing was blocked by the browser or embedding context. ` +
+        `Try again, or use a smaller file.`
+      ));
+    }, HARD_TIMEOUT_MS);
 
     Papa.parse(blob as File, {
-      worker: true,
+      // Disabled: worker-based parsing can silently hang with zero callbacks
+      // (no chunk/complete/error) inside sandboxed or CSP-restricted preview
+      // iframes. Chunked main-thread parsing still yields between chunks via
+      // Papa's own scheduling, so the UI stays responsive without a worker.
+      worker: false,
       header: true,
       dynamicTyping: true,
       skipEmptyLines: true,
+      chunkSize: CHUNK_SIZE,
       chunk: (results) => {
+        if (settled) return;
         if (results.data && Array.isArray(results.data)) {
           for (let i = 0; i < results.data.length; i++) {
             rows.push(results.data[i]);
@@ -292,6 +314,9 @@ export function loadCSV(
         }
       },
       complete: () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
         try {
           const headerFields = rows.length > 0 ? Object.keys(rows[0] || {}) : [];
           const versionSignature = typeof source === 'string'
@@ -306,6 +331,9 @@ export function loadCSV(
         }
       },
       error: (err: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
         reject(err);
       }
     });
@@ -404,6 +432,12 @@ export interface ColumnInfo {
   sample: any;
 }
 
+export function getTableData(tableName: string): any[] {
+  const tbl = getSqlTableName(tableName);
+  const tableObj = (alasql.tables as any)[tbl];
+  return tableObj?.data || [];
+}
+
 export function getTableSchema(tableName: string): ColumnInfo[] {
   const tbl = getSqlTableName(tableName);
   const tableObj = (alasql.tables as any)[tbl];
@@ -440,6 +474,35 @@ export function isTableLoaded(tableName: string): boolean {
   const tbl = getSqlTableName(tableName);
   const tableObj = (alasql.tables as any)[tbl];
   return !!(tableObj && tableObj.data && tableObj.data.length > 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANALYTICS ROW SAMPLING (avoids blocking the main thread on huge tables)
+// ─────────────────────────────────────────────────────────────────────────────
+const ANALYSIS_ROW_CAP = 50_000;
+
+/**
+ * Returns rows for the analytics pipeline. Reads directly off the AlaSQL table's
+ * backing array (skips the SQL engine's SELECT * overhead) and, for tables above
+ * maxRows, returns a reservoir-sampled representative subset instead of the full
+ * dataset. Feeding an unbounded 100k+/1M+ row array into the synchronous,
+ * main-thread analytics pipeline is what causes the "Analyze" button to freeze
+ * the tab on large uploads — this keeps the pipeline's input bounded regardless
+ * of dataset size. Use getTableRowCount() for the true total row count.
+ */
+export function getTableRows(tableName: string, maxRows: number = ANALYSIS_ROW_CAP): any[] {
+  const tbl = getSqlTableName(tableName);
+  const tableObj = (alasql.tables as any)[tbl];
+  const data: any[] = tableObj?.data || [];
+
+  if (data.length <= maxRows) return data;
+
+  const reservoir = data.slice(0, maxRows);
+  for (let i = maxRows; i < data.length; i++) {
+    const j = Math.floor(Math.random() * (i + 1));
+    if (j < maxRows) reservoir[j] = data[i];
+  }
+  return reservoir;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

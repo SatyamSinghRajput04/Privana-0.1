@@ -54,17 +54,32 @@ export const RankingExecutor = {
       };
     } else {
       // Individual record ranking (e.g. top 5 records by sleep_hours)
-      const validRows = rows
-        .filter(r => r[metric] !== null && r[metric] !== undefined && r[metric] !== '' && !isNaN(Number(r[metric])))
-        .map(r => ({ ...r, metric_value: Number(r[metric]) }));
+      const topN: any[] = [];
+      let validCount = 0;
 
-      validRows.sort((a, b) => b.metric_value - a.metric_value);
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const v = r[metric];
+        if (v === null || v === undefined || v === '') continue;
+        const numV = Number(v);
+        if (isNaN(numV)) continue;
+        
+        validCount++;
 
-      rankedRows = validRows.slice(0, limit).map((row, idx) => ({
+        if (topN.length < limit) {
+          topN.push({ ...r, metric_value: numV });
+          topN.sort((a, b) => b.metric_value - a.metric_value);
+        } else if (numV > topN[topN.length - 1].metric_value) {
+          topN[topN.length - 1] = { ...r, metric_value: numV };
+          topN.sort((a, b) => b.metric_value - a.metric_value);
+        }
+      }
+
+      rankedRows = topN.map((row, idx) => ({
         ...row,
         rank_label: row.id ? String(row.id) : `Rank ${idx + 1}`,
       }));
-      status = validRows.length < 5 ? 'partial_small_n' : 'success';
+      status = validCount < 5 ? 'partial_small_n' : 'success';
       metadata = {
         ...metadata,
         limit,

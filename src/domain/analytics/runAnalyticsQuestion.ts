@@ -31,6 +31,13 @@ export interface AnalyticsContext {
   bypassMetadataCheck?: boolean;
   minRowCount?: number;
   /**
+   * True row count of the dataset, when `rows` is a representative sample
+   * (see getTableRows in sqlEngine.ts) rather than the full table. Used to
+   * report accurate totals (e.g. summary record counts) even when the
+   * pipeline computed on a sample for performance.
+   */
+  totalRowCount?: number;
+  /**
    * Run id captured by the caller (via useCockpitStore.getState().startNewRun()) when the
    * question was dispatched. Committing with this instead of re-reading
    * currentRunId lets the store's Latest-Wins check catch a commit from a superseded run.
@@ -322,6 +329,12 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
         reason: execResult.metadata?.reason || 'The query could not be executed due to missing or invalid data records.',
         provenance: buildProvenance(),
       };
+    }
+
+    // When rows is a representative sample (large dataset), report the true
+    // total record count instead of the sampled length.
+    if (plan.intent === 'summary' && ctx.totalRowCount !== undefined && execResult.metadata) {
+      execResult.metadata.rowCount = ctx.totalRowCount;
     }
 
     // 8. Compile Narrative & Chart Spec

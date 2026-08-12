@@ -47,23 +47,27 @@ export const CorrelationExecutor = {
       return { status: 'partial_missing', rows: [] };
     }
 
-    // Filter out missing values
-    const cleanRows = rows.filter(r => 
-      r[metric] !== null && r[metric] !== undefined && r[metric] !== '' &&
-      r[target] !== null && r[target] !== undefined && r[target] !== ''
-    );
+    const metricVals: any[] = [];
+    const targetVals: any[] = [];
+    let isMetricNumeric = true;
+    let isTargetNumeric = true;
 
-    if (cleanRows.length < 3) {
-      return { status: 'partial_missing', rows: [], metadata: { reason: 'At least 3 complete records are required.' } };
+    for (let i = 0; i < rows.length; i++) {
+      const rm = rows[i][metric];
+      const rt = rows[i][target];
+      if (rm !== null && rm !== undefined && rm !== '' &&
+          rt !== null && rt !== undefined && rt !== '') {
+        metricVals.push(rm);
+        targetVals.push(rt);
+        if (isMetricNumeric && isNaN(Number(rm))) isMetricNumeric = false;
+        if (isTargetNumeric && isNaN(Number(rt))) isTargetNumeric = false;
+      }
     }
 
-    // Extract values
-    const metricVals = cleanRows.map(r => r[metric]);
-    const targetVals = cleanRows.map(r => r[target]);
-
-    // Check if numeric
-    const isMetricNumeric = metricVals.every(v => !isNaN(Number(v)));
-    const isTargetNumeric = targetVals.every(v => !isNaN(Number(v)));
+    const cleanRowCount = metricVals.length;
+    if (cleanRowCount < 3) {
+      return { status: 'partial_missing', rows: [], metadata: { reason: 'At least 3 complete records are required.' } };
+    }
 
     let rVal = 0;
     let method = 'Pearson';
@@ -89,7 +93,7 @@ export const CorrelationExecutor = {
         method = 'Pearson';
       }
 
-      const sig = testCorrelationSignificance(rVal, cleanRows.length);
+      const sig = testCorrelationSignificance(rVal, cleanRowCount);
       pVal = sig.p;
     } else if (isMetricNumeric || isTargetNumeric) {
       // One numeric, one categorical. Check if categorical is binary
@@ -104,7 +108,7 @@ export const CorrelationExecutor = {
         rVal = pb.correlation;
         method = 'Point-Biserial';
         
-        const sig = testCorrelationSignificance(rVal, cleanRows.length);
+        const sig = testCorrelationSignificance(rVal, cleanRowCount);
         pVal = sig.p;
 
         if (binaryMapping.isAmbiguous) {
@@ -130,28 +134,48 @@ export const CorrelationExecutor = {
     }
 
     // ── Scatter overlay (downsampled for DOM safety) ─────────────────────
-    // Statistics above used ALL cleanRows. Visual scatter is capped at
+    // Statistics above used ALL valid points. Visual scatter is capped at
     // MAX_SCATTER_POINTS via reservoir sampling to preserve uniform coverage.
-    let points: { x: number; y: number }[];
-    if (cleanRows.length <= MAX_SCATTER_POINTS) {
-      points = cleanRows.map(r => projectPoint(r, metric, target, method, binaryMapping, isMetricNumeric, isTargetNumeric));
+    let points: { x: number; y: number }[] = [];
+    
+    const projectArrays = (i: number): { x: number; y: number } => {
+       let x = Number(metricVals[i]);
+       let y = Number(targetVals[i]);
+       if (method === 'Point-Biserial' && binaryMapping) {
+         if (!isMetricNumeric) {
+           x = (metricVals[i] === binaryMapping.posValue || String(metricVals[i]) === String(binaryMapping.posValue)) ? 1 : 0;
+         }
+         if (!isTargetNumeric) {
+           y = (targetVals[i] === binaryMapping.posValue || String(targetVals[i]) === String(binaryMapping.posValue)) ? 1 : 0;
+         }
+       }
+       return { x, y };
+    };
+
+    if (cleanRowCount <= MAX_SCATTER_POINTS) {
+      for (let i = 0; i < cleanRowCount; i++) {
+        points.push(projectArrays(i));
+      }
     } else {
       // Reservoir sampling: first N, then probabilistic replacement
-      const reservoir = cleanRows.slice(0, MAX_SCATTER_POINTS);
-      for (let i = MAX_SCATTER_POINTS; i < cleanRows.length; i++) {
+      const reservoirIndices = new Array(MAX_SCATTER_POINTS);
+      for (let i = 0; i < MAX_SCATTER_POINTS; i++) reservoirIndices[i] = i;
+      for (let i = MAX_SCATTER_POINTS; i < cleanRowCount; i++) {
         const j = Math.floor(Math.random() * (i + 1));
-        if (j < MAX_SCATTER_POINTS) reservoir[j] = cleanRows[i];
+        if (j < MAX_SCATTER_POINTS) reservoirIndices[j] = i;
       }
-      points = reservoir.map(r => projectPoint(r, metric, target, method, binaryMapping, isMetricNumeric, isTargetNumeric));
+      for (let j = 0; j < MAX_SCATTER_POINTS; j++) {
+        points.push(projectArrays(reservoirIndices[j]));
+      }
     }
 
     return {
-      status: cleanRows.length < 5 ? 'partial_small_n' : 'success',
+      status: cleanRowCount < 5 ? 'partial_small_n' : 'success',
       rows: [{
         r: rVal,
         pValue: pVal,
         method,
-        sampleSize: cleanRows.length,
+        sampleSize: cleanRowCount,
         points,
       }],
       metadata: {

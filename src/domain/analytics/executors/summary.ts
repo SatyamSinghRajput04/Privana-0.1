@@ -22,40 +22,38 @@ export const SummaryExecutor = {
     const keys = Object.keys(rows[0]);
     const summaryRows: any[] = [];
 
+    const rowCount = rows.length;
     for (const key of keys) {
       if (key === 'id') continue;
 
-      const vals = rows.map(r => r[key]).filter(v => v !== null && v !== undefined && v !== '');
-      const missingCount = rows.length - vals.length;
+      let missingCount = 0;
+      let numericCount = 0;
+      let sum = 0;
+      let min = Infinity;
+      let max = -Infinity;
 
-      // Check if mostly numeric
-      const numericVals = vals.map(v => Number(v)).filter(v => !isNaN(v));
-      const isNumeric = numericVals.length > 0 && (numericVals.length / vals.length) > 0.8;
+      const counts: Record<string, number> = {};
+      let uniqueCount = 0;
+      let topVal = '';
+      let maxCount = 0;
 
-      if (isNumeric) {
-        const sum = numericVals.reduce((acc, curr) => acc + curr, 0);
-        const avg = sum / numericVals.length;
-        const sorted = [...numericVals].sort((a, b) => a - b);
-        const min = sorted[0];
-        const max = sorted[sorted.length - 1];
+      // Single O(N) pass per column (no array allocations)
+      for (let i = 0; i < rowCount; i++) {
+        const v = rows[i][key];
+        if (v === null || v === undefined || v === '') {
+          missingCount++;
+          continue;
+        }
 
-        summaryRows.push({
-          columnName: key,
-          type: 'numeric',
-          min,
-          max,
-          avg,
-          missingCount,
-        });
-      } else {
-        // Categorical stats
-        const counts: Record<string, number> = {};
-        let uniqueCount = 0;
-        let topVal = '';
-        let maxCount = 0;
-
-        for (const val of vals) {
-          const s = String(val);
+        const numV = Number(v);
+        // Exclude booleans from being cast to 0/1 numerics if we are strictly treating as numbers
+        if (!isNaN(numV) && typeof v !== 'boolean') {
+          numericCount++;
+          sum += numV;
+          if (numV < min) min = numV;
+          if (numV > max) max = numV;
+        } else {
+          const s = String(v);
           if (!counts[s]) {
             counts[s] = 0;
             uniqueCount++;
@@ -64,6 +62,41 @@ export const SummaryExecutor = {
           if (counts[s] > maxCount) {
             maxCount = counts[s];
             topVal = s;
+          }
+        }
+      }
+
+      const presentCount = rowCount - missingCount;
+      const isNumeric = presentCount > 0 && numericCount > 0 && (numericCount / presentCount) > 0.8;
+
+      if (isNumeric) {
+        summaryRows.push({
+          columnName: key,
+          type: 'numeric',
+          min: min === Infinity ? 0 : min,
+          max: max === -Infinity ? 0 : max,
+          avg: numericCount > 0 ? sum / numericCount : 0,
+          missingCount,
+        });
+      } else {
+        // Fallback for categorical values
+        // To be 100% accurate we'd recount the `numV` values as strings,
+        // but for a summary, relying on what we parsed as strings + uniqueCount is often enough.
+        // Actually, let's just do a quick string tally for the numeric values we skipped:
+        if (numericCount > 0) {
+          for (let i = 0; i < rowCount; i++) {
+            const v = rows[i][key];
+            if (v === null || v === undefined || v === '') continue;
+            const s = String(v);
+            if (!counts[s]) {
+              counts[s] = 0;
+              uniqueCount++;
+            }
+            counts[s]++;
+            if (counts[s] > maxCount) {
+              maxCount = counts[s];
+              topVal = s;
+            }
           }
         }
 

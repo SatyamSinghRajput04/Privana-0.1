@@ -205,10 +205,11 @@ export default function DatasetsPage({ setPage }: P) {
       const realColsMeta = parsedRows.length > 0
         ? Object.keys(parsedRows[0]).map(colName => {
             const samples = parsedRows.slice(0, 10).map(r => r[colName]).filter(v => v != null && v !== '');
-            const numCount = samples.filter(v => typeof v === 'number').length;
+            const numCount = samples.filter(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v)))).length;
             let colType = 'VARCHAR';
             if (numCount > samples.length * 0.6) {
-              colType = Number.isInteger(samples.find(v => typeof v === 'number')) ? 'INTEGER' : 'DECIMAL';
+              const firstNum = samples.find(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v))));
+              colType = firstNum !== undefined && Number.isInteger(Number(firstNum)) ? 'INTEGER' : 'DECIMAL';
             }
             return { name: colName, type: colType, is_he: false };
           })

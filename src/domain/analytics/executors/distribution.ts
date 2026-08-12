@@ -15,27 +15,57 @@ export const DistributionExecutor = {
       return { status: 'partial_missing', rows: [] };
     }
 
-    const vals = rows.map(r => r[metric]).filter(v => v !== null && v !== undefined && v !== '');
-    if (vals.length === 0) {
+    const numericVals: number[] = [];
+    const categoricalCounts: Record<string, number> = {};
+    let presentCount = 0;
+    let hasNonInteger = false;
+    let min = Infinity;
+    let max = -Infinity;
+
+    for (let i = 0; i < rows.length; i++) {
+      const v = rows[i][metric];
+      if (v === null || v === undefined || v === '') continue;
+      presentCount++;
+
+      const numV = Number(v);
+      if (!isNaN(numV) && typeof v !== 'boolean') {
+        numericVals.push(numV);
+        if (numV < min) min = numV;
+        if (numV > max) max = numV;
+        if (!Number.isInteger(numV)) hasNonInteger = true;
+      } else {
+        const s = String(v);
+        categoricalCounts[s] = (categoricalCounts[s] || 0) + 1;
+      }
+    }
+
+    if (presentCount === 0) {
       return { status: 'partial_missing', rows: [] };
     }
 
-    // Check if numeric
-    const numericVals = vals.map(v => Number(v)).filter(v => !isNaN(v));
-    const uniqueNumericVals = new Set(numericVals);
+    let uniqueNumericSize = 0;
+    if (hasNonInteger) {
+      uniqueNumericSize = 11;
+    } else {
+      const tempSet = new Set<number>();
+      for (let i = 0; i < numericVals.length; i++) {
+        tempSet.add(numericVals[i]);
+        if (tempSet.size > 10) {
+          uniqueNumericSize = 11;
+          break;
+        }
+      }
+      uniqueNumericSize = tempSet.size;
+    }
+
     const isNumeric = numericVals.length > 0 && 
-                      (numericVals.length / vals.length) > 0.8 &&
-                      (uniqueNumericVals.size > 10 || numericVals.some(v => !Number.isInteger(v)));
+                      (numericVals.length / presentCount) > 0.8 &&
+                      (uniqueNumericSize > 10 || hasNonInteger);
 
     const distributionRows: any[] = [];
 
     if (isNumeric) {
-      // Compute histogram bins using Sturges' formula
-      const sorted = [...numericVals].sort((a, b) => a - b);
-      const min = sorted[0];
-      const max = sorted[sorted.length - 1];
       const range = max - min;
-
       if (range === 0) {
         distributionRows.push({
           binRange: `${min}`,
@@ -47,34 +77,37 @@ export const DistributionExecutor = {
       } else {
         const binCount = Math.ceil(Math.log2(numericVals.length) + 1);
         const binWidth = range / binCount;
+        const counts = new Array(binCount).fill(0);
+
+        for (let i = 0; i < numericVals.length; i++) {
+          const v = numericVals[i];
+          let binIndex = Math.floor((v - min) / binWidth);
+          if (binIndex >= binCount) binIndex = binCount - 1;
+          if (binIndex < 0) binIndex = 0;
+          counts[binIndex]++;
+        }
 
         for (let i = 0; i < binCount; i++) {
           const start = min + i * binWidth;
           const end = start + binWidth;
-          // Include upper bound on last bin
-          const count = numericVals.filter(v => 
-            i === binCount - 1 ? (v >= start && v <= end) : (v >= start && v < end)
-          ).length;
-
           const label = `${start.toFixed(1)} - ${end.toFixed(1)}`;
           distributionRows.push({
             binRange: label,
             binLabel: label,
-            count,
+            count: counts[i],
             minVal: start,
             maxVal: end,
           });
         }
       }
     } else {
-      // Categorical frequency
-      const counts: Record<string, number> = {};
-      for (const val of vals) {
-        const s = String(val);
-        counts[s] = (counts[s] || 0) + 1;
+      // Add back the numbers we collected as strings
+      for (let i = 0; i < numericVals.length; i++) {
+        const s = String(numericVals[i]);
+        categoricalCounts[s] = (categoricalCounts[s] || 0) + 1;
       }
 
-      for (const [key, count] of Object.entries(counts)) {
+      for (const [key, count] of Object.entries(categoricalCounts)) {
         distributionRows.push({
           binRange: key,
           category_label: key,

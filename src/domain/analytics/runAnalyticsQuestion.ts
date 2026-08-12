@@ -279,33 +279,54 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       }
     }
 
+    // STEP 5.5 — Intent-aware row capping.
+    // Distribution/grouped_average/ranking/comparison/filter are single O(n)
+    // passes and stay exact on the full dataset even at 1M+ rows — sampling
+    // them trades correctness for a speedup they don't need (this is what
+    // was producing "Total Records: 50000" on a 200,000-row dataset).
+    // Correlation and feature_importance do per-row pairwise statistics
+    // across every column and are the intents that actually caused the
+    // multi-second main-thread freeze on very large datasets, so only those
+    // (plus summary, which sorts every numeric column) get capped.
+    const ROW_HEAVY_INTENTS = new Set(['correlation', 'feature_importance', 'summary']);
+    const ANALYSIS_ROW_CAP = 50_000;
+    let execRows = rows;
+    if (ROW_HEAVY_INTENTS.has(plan.intent) && rows.length > ANALYSIS_ROW_CAP) {
+      const reservoir = rows.slice(0, ANALYSIS_ROW_CAP);
+      for (let i = ANALYSIS_ROW_CAP; i < rows.length; i++) {
+        const j = Math.floor(Math.random() * (i + 1));
+        if (j < ANALYSIS_ROW_CAP) reservoir[j] = rows[i];
+      }
+      execRows = reservoir;
+    }
+
     // STEP 6 — Executor dispatch wrapped in try/catch
     let execResult: ExecutorResult;
     try {
       switch (plan.intent) {
         case 'summary':
-          execResult = SummaryExecutor.execute(plan, rows);
+          execResult = SummaryExecutor.execute(plan, execRows);
           break;
         case 'distribution':
-          execResult = DistributionExecutor.execute(plan, rows);
+          execResult = DistributionExecutor.execute(plan, execRows);
           break;
         case 'grouped_average':
-          execResult = GroupedAverageExecutor.execute(plan, rows);
+          execResult = GroupedAverageExecutor.execute(plan, execRows);
           break;
         case 'correlation':
-          execResult = CorrelationExecutor.execute(plan, rows);
+          execResult = CorrelationExecutor.execute(plan, execRows);
           break;
         case 'feature_importance':
-          execResult = FeatureImportanceExecutor.execute(plan, rows);
+          execResult = FeatureImportanceExecutor.execute(plan, execRows);
           break;
         case 'ranking':
-          execResult = RankingExecutor.execute(plan, rows);
+          execResult = RankingExecutor.execute(plan, execRows);
           break;
         case 'filter':
-          execResult = FilterExecutor.execute(plan, rows);
+          execResult = FilterExecutor.execute(plan, execRows);
           break;
         case 'comparison':
-          execResult = ComparisonExecutor.execute(plan, rows);
+          execResult = ComparisonExecutor.execute(plan, execRows);
           break;
         default:
           return {

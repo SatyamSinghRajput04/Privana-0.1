@@ -1022,7 +1022,11 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           // Yield one frame so the "Processing..." UI paints before the
           // (synchronous, main-thread) analytics pipeline runs below.
           await new Promise(r => setTimeout(r, 0));
-          const rows = getTableRows(tableName);
+          // Full, unsampled row set — runAnalyticsQuestion decides per-intent
+          // whether a sample is needed (aggregation-style intents like
+          // distribution/grouped_average are cheap single passes and get the
+          // full, exact dataset; only row-heavy statistical intents sample).
+          const rows = getTableRows(tableName, Infinity);
           const totalRowCount = getTableRowCount(tableName);
           const profile = DatasetValidator.profile(rows, tableName);
           
@@ -1163,7 +1167,11 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
           // Yield one frame so the "Processing..." UI paints before the
           // (synchronous, main-thread) analytics pipeline runs below.
           await new Promise(r => setTimeout(r, 0));
-          const rows = getTableRows(tableName);
+          // Full, unsampled row set — runAnalyticsQuestion decides per-intent
+          // whether a sample is needed (aggregation-style intents like
+          // distribution/grouped_average are cheap single passes and get the
+          // full, exact dataset; only row-heavy statistical intents sample).
+          const rows = getTableRows(tableName, Infinity);
           const totalRowCount = getTableRowCount(tableName);
           const profile = DatasetValidator.profile(rows, tableName);
           
@@ -1352,7 +1360,11 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             // Yield one frame so the "Processing..." UI paints before the
             // (synchronous, main-thread) analytics pipeline runs below.
             await new Promise(r => setTimeout(r, 0));
-            const rows = getTableRows(tableName);
+            // Full, unsampled row set — runAnalyticsQuestion decides per-intent
+            // whether a sample is needed (aggregation-style intents like
+            // distribution/grouped_average are cheap single passes and get the
+            // full, exact dataset; only row-heavy statistical intents sample).
+            const rows = getTableRows(tableName, Infinity);
             const totalRowCount = getTableRowCount(tableName);
             const profile = DatasetValidator.profile(rows, tableName);
             const context = {

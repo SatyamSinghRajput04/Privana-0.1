@@ -15,6 +15,8 @@ import { localDB } from '../lib/indexedDb';
 import { useVaultStore } from '../store/useVaultStore';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { useCockpitStore } from '../store/useCockpitStore';
+import { useAnswerWorkspaceStore } from '../store/useAnswerWorkspaceStore';
+import { CompoundQuestionPlanner } from '../domain/analytics/compoundQuestionPlanner';
 import { planWorkspace, executeWorkspaceActiveTab } from '../domain/analytics/workspaceQueryEngine';
 import { 
   Moon, Users, Heart, Database, Search, Filter, Save, Layers, ChevronRight, 
@@ -446,6 +448,68 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
     }
     return isTableLoaded(tableName);
   };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // "+ CREATE ANOTHER CHART" — executes a user-typed sub-question through the
+  // normal single-plan pipeline and appends it to the active Answer
+  // Workspace under the SAME questionId with a NEW planId. Never replaces
+  // existing charts. Requested via useAnswerWorkspaceStore.requestAdditionalChart
+  // (set by AnswerWorkspaceView) rather than prop-drilling through
+  // ResultView/ComputedView, since this page is where the loaded
+  // rows/profile/table already live.
+  // ─────────────────────────────────────────────────────────────────────────
+  const pendingChartRequest = useAnswerWorkspaceStore(s => s.pendingChartRequest);
+  useEffect(() => {
+    if (!pendingChartRequest) return;
+    const targetWorkspace = useAnswerWorkspaceStore.getState().activeWorkspace;
+    if (!selectedDataset || !targetWorkspace) {
+      useAnswerWorkspaceStore.getState().clearPendingChartRequest();
+      return;
+    }
+
+    const run = async () => {
+      const subQuestion = pendingChartRequest;
+      try {
+        const isLoaded = await ensureTableLoaded(selectedDataset);
+        if (!isLoaded) {
+          throw new Error(`Raw CSV content for "${selectedDataset.name}" is missing from local browser storage.`);
+        }
+        const tableName = selectedDataset.name;
+        const rows = getTableRows(tableName, Infinity);
+        const totalRowCount = getTableRowCount(tableName);
+        const profile = DatasetValidator.profile(rows, tableName);
+        const newRunId = useCockpitStore.getState().startNewRun();
+
+        const result = await runAnalyticsQuestion(subQuestion, {
+          tableName,
+          rows,
+          profile,
+          totalRowCount,
+          bypassMetadataCheck: !!bypassedDatasets[selectedDataset.id],
+          runId: newRunId,
+        });
+
+        // Ownership guard: only append if the workspace this chart was
+        // requested for is still the active one (user could have started an
+        // entirely new question while this was computing).
+        const stillActive = useAnswerWorkspaceStore.getState().activeWorkspace;
+        if (stillActive && stillActive.questionId === targetWorkspace.questionId) {
+          if (result.status === 'computed' || result.status === 'partial') {
+            useAnswerWorkspaceStore.getState().addEntry(targetWorkspace.questionId, result.plan.planId, subQuestion, result);
+          } else {
+            const reason = (result as any).reason || (result as any).message || (result as any).explanation || 'Could not compute that chart.';
+            showToast(`⚠️ ${reason}`);
+          }
+        }
+      } catch (err: any) {
+        showToast(`⚠️ Failed to create chart: ${err.message || 'Unknown error'}`);
+      } finally {
+        useAnswerWorkspaceStore.getState().clearPendingChartRequest();
+      }
+    };
+
+    run();
+  }, [pendingChartRequest]);
 
   // Local calculation states
   const [kpis, setKpis] = useState({ sleep: 0, age: 0, stress: 0, records: 0 });
@@ -1038,89 +1102,111 @@ export default function AnalyzePage({ setPage, page, onMenu }: P) {
             bypassMetadataCheck: selectedDataset ? !!bypassedDatasets[selectedDataset.id] : false,
             runId
           };
-          
-          const result = await runAnalyticsQuestion(inputToUse, context);
-
-          
-          // Log results locally
-          try {
-            await EvalLogger.log(inputToUse, result);
-          } catch (logErr) {
-            console.error('Failed to log evaluation run:', logErr);
-          }
-          
-          // A newer question may have been fired while this one was in flight —
-          // don't let a stale, slower response overwrite the current on-screen answer.
-          const isStale = runId !== latestQuestionRunIdRef.current;
-
-          if (!isStale) {
-            setQaResponse(result);
-            setAnalyticalContext(null); // Managed inside ResultView / ComputedView
-
-            // Wire store actions so dynamic snapshots are added to the workspace
-            useWorkspaceStore.getState().addAnalyticalSnapshot(inputToUse, result);
-
-            // ── Save query to history (IndexedDB in solo mode, server in team mode) ──
-            if (ws && selectedDataset && result.status !== 'error') {
-              const resultRows: any[] = (result as any).data?.rows ?? (result as any).rows ?? [];
-              const intentRaw = (result as any).plan?.intent ?? '';
-              const chartObj = (result as any).chart;
-              const chartType = chartObj?.chartType ?? (intentRaw === 'correlation' ? 'scatter' : intentRaw === 'filter' ? 'table' : 'bar');
-              const xAxisKey = chartObj?.xAxisKey ?? '';
-              const yAxisKey = chartObj?.yAxisKey ?? '';
-              const chartTitle = chartObj?.title ?? '';
-
-              saveQuery({
-                workspace_id: ws.id,
-                dataset_id: selectedDataset.id,
-                question: inputToUse,
-                generated_sql: (result as any).provenance?.sql ?? '',
-                result_data: resultRows.slice(0, 500), // cap to 500 rows for storage
-                chart_type: chartType,
-                x_axis_key: xAxisKey,
-                y_axis_key: yAxisKey,
-                chart_title: chartTitle,
-                insights: (result as any).insights ?? [],
-                execution_ms: (result as any).provenance?.executionTimeMs ?? 0,
-                row_count: resultRows.length,
-              }).catch(e => console.warn('Failed to save query to history:', e));
-            }
-          }
 
           // ─────────────────────────────────────────────────────────────────
-          // LEVEL 2: CONTEXTUAL CARD INJECTION
-          // For computed/partial results, inject the answer as a highlighted
-          // card into the most relevant static sheet and auto-switch to it.
+          // QUESTION → MULTIPLE PLANS → MULTIPLE CHARTS
+          //
+          // One user question owns exactly one questionId (created below once
+          // the primary sub-plan's result is known, so the same sheet-matching
+          // logic as before decides where the answer lands). A question can
+          // own 1 planId (the normal, simple case — CompoundQuestionPlanner
+          // returns the original question unchanged) or 2-3 planIds for the
+          // small set of explicitly supported compound patterns (see
+          // compoundQuestionPlanner.ts). Every sub-question still runs through
+          // the SAME, unmodified runAnalyticsQuestion pipeline as an
+          // independent plan — this is not a second analytics engine.
           // ─────────────────────────────────────────────────────────────────
-          if (!isStale && (result.status === 'computed' || result.status === 'partial') && activeWorkspace) {
+          const decomposition = CompoundQuestionPlanner.decompose(inputToUse, profile);
+          const subQuestions = decomposition.subQuestions;
+
+          let questionId: string | null = null;
+
+          for (let i = 0; i < subQuestions.length; i++) {
+            const subQuestion = subQuestions[i];
+            const subResult = await runAnalyticsQuestion(subQuestion, context);
+
             try {
-              const visualContract = mapToVisualContract(result);
-              const targetSheetId = matchResultToSheet(result, activeWorkspace);
+              await EvalLogger.log(subQuestion, subResult);
+            } catch (logErr) {
+              console.error('Failed to log evaluation run:', logErr);
+            }
 
-              // Determine chart type from intent
-              const intentChartMap: Record<string, 'bar' | 'scatter' | 'table' | 'kpi'> = {
-                distribution: 'bar', grouped_average: 'bar', ranking: 'bar',
-                comparison: 'bar', correlation: 'scatter', feature_importance: 'bar',
-                filter: 'table', summary: 'kpi',
-              };
-              const chartType = intentChartMap[(result as any).plan?.intent] ?? 'bar';
+            // A newer question may have been fired while this one was in
+            // flight — don't let a stale, slower response overwrite the
+            // current on-screen answer, and stop issuing further sub-plans
+            // for a question that's already been superseded.
+            const isStale = runId !== latestQuestionRunIdRef.current;
+            if (isStale) break;
 
-              setContextualCard({
-                sheetId: targetSheetId,
-                cardId: 'card_contextual_qa',
-                question: inputToUse,
-                visualContract,
-                intent: (result as any).plan?.intent || 'summary',
-                chartType,
-              });
+            if (i === 0) {
+              setQaResponse(subResult);
+              setAnalyticalContext(null); // Managed inside ResultView / ComputedView
 
-              // Switch to the matched sheet so the user sees the injection immediately
-              setActiveSheetId(targetSheetId);
-              // Clear Q&A response so we drop into STATE 4 (canvas view) instead of result view
-              setQaResponse(null);
-            } catch (injErr) {
-              console.warn('[Level2] Contextual card injection failed:', injErr);
-              // Non-fatal — Q&A result still visible via snapshot tab
+              // Wire store actions so dynamic snapshots are added to the workspace
+              useWorkspaceStore.getState().addAnalyticalSnapshot(inputToUse, subResult);
+
+              // ── Save query to history (primary sub-question only — a compound
+              // question shouldn't fan out into N history entries) ──
+              if (ws && selectedDataset && subResult.status !== 'error') {
+                const resultRows: any[] = (subResult as any).data?.rows ?? (subResult as any).rows ?? [];
+                const intentRaw = (subResult as any).plan?.intent ?? '';
+                const chartObj = (subResult as any).chart;
+                const chartType = chartObj?.chartType ?? (intentRaw === 'correlation' ? 'scatter' : intentRaw === 'filter' ? 'table' : 'bar');
+                const xAxisKey = chartObj?.xAxisKey ?? '';
+                const yAxisKey = chartObj?.yAxisKey ?? '';
+                const chartTitle = chartObj?.title ?? '';
+
+                saveQuery({
+                  workspace_id: ws.id,
+                  dataset_id: selectedDataset.id,
+                  question: inputToUse,
+                  generated_sql: (subResult as any).provenance?.sql ?? '',
+                  result_data: resultRows.slice(0, 500), // cap to 500 rows for storage
+                  chart_type: chartType,
+                  x_axis_key: xAxisKey,
+                  y_axis_key: yAxisKey,
+                  chart_title: chartTitle,
+                  insights: (subResult as any).insights ?? [],
+                  execution_ms: (subResult as any).provenance?.executionTimeMs ?? 0,
+                  row_count: resultRows.length,
+                }).catch(e => console.warn('Failed to save query to history:', e));
+              }
+
+              // Only computed/partial results get an Answer Workspace — blocked/
+              // clarify/unsupported/refused/error results render via the normal
+              // qaResponse → ResultView path (BlockedView, ClarifyView, etc.),
+              // exactly as before this change, and there's nothing meaningful
+              // to decompose further.
+              if ((subResult.status !== 'computed' && subResult.status !== 'partial') || !activeWorkspace) {
+                break;
+              }
+
+              try {
+                const targetSheetId = matchResultToSheet(subResult, activeWorkspace);
+                questionId = useAnswerWorkspaceStore.getState().startNewQuestion(
+                  inputToUse,
+                  targetSheetId,
+                  decomposition.matchedPattern
+                );
+                useAnswerWorkspaceStore.getState().addEntry(questionId, subResult.plan.planId, subQuestion, subResult);
+
+                // Switch to the matched sheet so the user sees the answer immediately
+                setActiveSheetId(targetSheetId);
+                // Clear Q&A response so we drop into the canvas view (Answer Workspace)
+                setQaResponse(null);
+              } catch (injErr) {
+                console.warn('[AnswerWorkspace] Failed to start question:', injErr);
+                questionId = null;
+                break; // fall back to the plain qaResponse view already set above
+              }
+            } else {
+              // Secondary sub-plan (compound question only). If it fails or
+              // gets refused (e.g. an edge-case column resolution), just skip
+              // it rather than blocking the rest of the dashboard.
+              if (!questionId) break;
+              if (subResult.status === 'computed' || subResult.status === 'partial') {
+                useAnswerWorkspaceStore.getState().addEntry(questionId, subResult.plan.planId, subQuestion, subResult);
+              }
             }
           }
         } catch (err: any) {

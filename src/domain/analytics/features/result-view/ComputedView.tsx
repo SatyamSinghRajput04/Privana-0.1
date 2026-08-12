@@ -17,6 +17,8 @@ import { ResultToVisualContext } from '../../resultToVisualContext';
 import { AnalyticsResult, CardDefinition, CardSpec, VisualContract } from '../../types';
 import { useCockpitStore } from '../../../../store/useCockpitStore';
 import { useWorkspaceStore } from '../../../../store/useWorkspaceStore';
+import { useAnswerWorkspaceStore } from '../../../../store/useAnswerWorkspaceStore';
+import { AnswerWorkspaceView } from '../answer-workspace/AnswerWorkspaceView';
 import { ComposedChart } from 'recharts';
 import { AnalyticsTable } from '../../../../components/AnalyticsTable';
 import UnifiedChart from '../../../../components/UnifiedChart';
@@ -448,6 +450,15 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   const setWorkspaceInFlight = useWorkspaceStore(s => s.setWorkspaceInFlight);
   const contextualCard = useWorkspaceStore(s => s.contextualCard);
 
+  // Question → Multiple Charts: the Answer Workspace is a separate, additive
+  // mechanism from committedVisual/committedPlanId above — it generalizes the
+  // same "a chart must know which question/plan it belongs to" guard to a
+  // question owning multiple charts instead of exactly one.
+  const answerWorkspace = useAnswerWorkspaceStore(s => s.activeWorkspace);
+  const isCreatingChart = useAnswerWorkspaceStore(s => s.pendingChartRequest !== null);
+  const requestAdditionalChart = useAnswerWorkspaceStore(s => s.requestAdditionalChart);
+  const clearAnswerWorkspace = useAnswerWorkspaceStore(s => s.clearWorkspace);
+
   const memoryInfo = React.useMemo(() => {
     let bytes = 12.5 * 1024 * 1024; // default baseline of 12.5MB
     if (committedVisual && (committedVisual as any).data && Array.isArray((committedVisual as any).data)) {
@@ -670,6 +681,9 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   const renderWorkspaceStandardSheet = (sheet: any) => {
     // contextualCard is reactive — sourced from the hook at component level, not getState()
     const hasContextualCard = contextualCard && contextualCard.sheetId === sheet.id;
+    // Question → Multiple Charts: takes priority over the legacy single-card
+    // contextualCard mechanism above when both would target this sheet.
+    const hasAnswerWorkspace = !!(answerWorkspace && answerWorkspace.sheetId === sheet.id);
 
     return (
       <div className="flex flex-col gap-3.5 w-full">
@@ -680,9 +694,9 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
               <span className="rounded-full border border-red-500/10 bg-red-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-red-400">
                 Workspace Canvas Active
               </span>
-              {hasContextualCard && (
+              {(hasAnswerWorkspace || hasContextualCard) && (
                 <span className="ml-2 rounded-full border border-amber-500/20 bg-amber-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-amber-400 animate-pulse">
-                  💡 Q&amp;A Answer Injected
+                  💡 Showing Answer — Clear Question To See Full Dashboard
                 </span>
               )}
               <h2 className="mt-2 text-md font-black tracking-tight text-zinc-100">
@@ -690,13 +704,25 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
               </h2>
             </div>
             <span className="text-[9px] font-mono text-zinc-500 bg-zinc-950/80 border border-zinc-900/60 px-2 py-0.5 rounded">
-              {sheet.cards.length + (hasContextualCard ? 1 : 0)} Cards
+              {hasAnswerWorkspace
+                ? `${answerWorkspace!.entries.length} Answer ${answerWorkspace!.entries.length === 1 ? 'Card' : 'Cards'}`
+                : hasContextualCard ? '1 Answer Card' : `${sheet.cards.length} Cards`}
             </span>
           </div>
         </div>
 
-        {/* ── LEVEL 2: CONTEXTUAL Q&A CARD ─────────────────────────────── */}
-        {hasContextualCard && (() => {
+        {/* ── QUESTION → MULTIPLE CHARTS: ANSWER WORKSPACE ─────────────── */}
+        {hasAnswerWorkspace && (
+          <AnswerWorkspaceView
+            workspace={answerWorkspace!}
+            isCreatingChart={isCreatingChart}
+            onCreateChart={requestAdditionalChart}
+            onClear={clearAnswerWorkspace}
+          />
+        )}
+
+        {/* ── LEVEL 2 (legacy): CONTEXTUAL Q&A CARD ────────────────────── */}
+        {!hasAnswerWorkspace && hasContextualCard && (() => {
           const vc = contextualCard.visualContract;
           const chartType = contextualCard.chartType;
           const question = contextualCard.question;
@@ -900,10 +926,11 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
         })()}
 
         {/* Static Cards Grid — hidden while a Q&A answer is showing, so the
-            answer is unmistakably the ONLY chart on screen and always matches
-            the question just asked. Clearing the question (QueryPanel reset)
-            or switching sheets brings the static grid back. */}
-        {!hasContextualCard && (
+            answer is unmistakably the ONLY chart(s) on screen and always
+            matches the question just asked. Clearing the question (QueryPanel
+            reset / Answer Workspace's Clear button) or switching sheets
+            brings the static grid back. */}
+        {!hasContextualCard && !hasAnswerWorkspace && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {sheet.cards.map((card: any) => renderWorkspaceCard(card))}
           </div>

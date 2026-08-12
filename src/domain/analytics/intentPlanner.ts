@@ -32,7 +32,11 @@ const INTENT_SYNONYMS: Record<AnalysisIntent, string[]> = {
     'leading', 'trailing', 'dominant', 'extreme',
   ],
   summary: [
-    'summary', 'summarize', 'overview', 'count', 'how many', 'total'
+    // 'count' and 'total' deliberately excluded here — step 8 already matches
+    // them precisely with word boundaries; a plain substring match in this
+    // fallback pass would re-introduce the same false-positive on column
+    // names like "total_orders" or "review_count" that step 8 was fixed for.
+    'summary', 'summarize', 'overview', 'how many'
   ],
   comparison: [
     'compare', 'comparison', 'difference between', 'versus', ' vs '
@@ -211,13 +215,17 @@ export const IntentPlanner = {
     }
 
     // 8. Summary (fallback or explicit summary keywords)
+    // "count"/"total" MUST be word-boundary matched — plain .includes() also
+    // matches inside column names like "total_orders" or "review_count",
+    // misclassifying "average of total_orders" as a flat row-count summary
+    // and silently ignoring the actual column the user asked about.
     if (
       q.includes('summary') ||
       q.includes('summarize') ||
       q.includes('overview') ||
-      q.includes('count') ||
+      /\bcount\b/.test(q) ||
       q.includes('how many') ||
-      q.includes('total')
+      /\btotal\b/.test(q)
     ) {
       return { intent: 'summary', confidence: 0.85 };
     }

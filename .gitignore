@@ -53,10 +53,6 @@ test-alasql.mjs
 # ── Scratch & Backup ───────────────────────────────────
 scratch/
 src/pages/AnalyzePage_test.bak
-*.zip
-find_*.cjs
-test_*.cjs
-tsc_*.txt
 
 # ── IDE & OS ───────────────────────────────────────────
 .vscode/

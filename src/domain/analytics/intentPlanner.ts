@@ -198,6 +198,18 @@ export const IntentPlanner = {
       return { intent: 'filter', confidence: 0.85 };
     }
 
+    // 7.5 "How many X (in/belong to/are there) each/per Y" is a grouped count,
+    // NOT a flat total — must be checked before the generic summary rule below,
+    // since that rule matches on the bare word "how many" and would otherwise
+    // swallow this into an undifferentiated total-row-count answer, silently
+    // discarding the "each/per Y" grouping the user actually asked for.
+    if (
+      (q.includes('how many') || q.includes('count of') || q.includes('number of')) &&
+      (/\beach\b/.test(q) || /\bper\b/.test(q) || / by /.test(q))
+    ) {
+      return { intent: 'distribution', confidence: 0.88 };
+    }
+
     // 8. Summary (fallback or explicit summary keywords)
     if (
       q.includes('summary') ||

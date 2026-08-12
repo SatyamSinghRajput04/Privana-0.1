@@ -899,10 +899,15 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
           );
         })()}
 
-        {/* Static Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-          {sheet.cards.map((card: any) => renderWorkspaceCard(card))}
-        </div>
+        {/* Static Cards Grid — hidden while a Q&A answer is showing, so the
+            answer is unmistakably the ONLY chart on screen and always matches
+            the question just asked. Clearing the question (QueryPanel reset)
+            or switching sheets brings the static grid back. */}
+        {!hasContextualCard && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {sheet.cards.map((card: any) => renderWorkspaceCard(card))}
+          </div>
+        )}
         {/* ── END CONTEXTUAL CARD ──────────────────────────────────────── */}
 
         {renderDevConsole()}

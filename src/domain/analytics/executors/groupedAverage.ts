@@ -1,9 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/executors/groupedAverage.ts
 // S8c GROUPED AVERAGE EXECUTOR — Computes metric averages grouped by a category.
+//
+// Stage 2.1 reference migration: data retrieval/aggregation now goes through
+// ComputeEngine.groupedAggregate() instead of a hand-rolled accumulator loop.
+// This executor owns everything ABOUT the result (ranking, small-cell status,
+// metadata) — the engine only fetches the numbers. RankingExecutor's grouped
+// path calls this executor directly, so it picks up the same engine boundary
+// automatically with no changes of its own.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AnalysisPlan, ExecutorResult } from '../types';
+import { computeEngine } from '../../compute';
 
 export const GroupedAverageExecutor = {
   /**
@@ -17,31 +25,11 @@ export const GroupedAverageExecutor = {
       return { status: 'partial_missing', rows: [] };
     }
 
-    // Grouping calculations
     const groupKeyCol = groupBy[0]; // Currently supporting single group-by column MVP
-    const groups: Record<string, { sum: number; count: number }> = {};
+    const resultRows = computeEngine.groupedAggregate(rows, metric, groupKeyCol);
 
-    for (const r of rows) {
-      const gVal = r[groupKeyCol];
-      const mVal = Number(r[metric]);
-
-      if (gVal === null || gVal === undefined || isNaN(mVal)) continue;
-
-      const key = String(gVal);
-      if (!groups[key]) {
-        groups[key] = { sum: 0, count: 0 };
-      }
-      groups[key].sum += mVal;
-      groups[key].count++;
-    }
-
-    const resultRows = Object.entries(groups).map(([groupVal, stats]) => ({
-      category_label: groupVal,
-      average_value: stats.sum / stats.count,
-      count: stats.count
-    }));
-
-    // Sort by average descending (highest average first)
+    // Sort by average descending (highest average first) — a ranking/
+    // presentation decision, not a data-access one, so it stays here.
     resultRows.sort((a, b) => b.average_value - a.average_value);
 
     // Check if any group cell count is below 5 (potential privacy suppression warning/state)

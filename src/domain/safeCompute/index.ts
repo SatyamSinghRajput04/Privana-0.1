@@ -8,7 +8,8 @@ import {
   resolveBinaryMapping,
   computePointBiserial,
   computeOneWayAnova,
-  computeCramersV
+  computeCramersV,
+  hasZeroVariance
 } from './relationshipRanker';
 import { applyBenjaminiHochberg } from './corrections';
 
@@ -149,6 +150,21 @@ export function runSafeCompute(input: SafeComputeInput): SafeComputeResult {
       computedMethod = 'Pearson';
       const xs = pairs.map(p => Number(p.x));
       const ys = pairs.map(p => Number(p.y));
+
+      // Zero variance in the PAIRED subset (not just the raw column — active
+      // filters can collapse an otherwise-varying column to one value) makes
+      // Pearson mathematically undefined. Exclude explicitly rather than
+      // silently reporting r=0, which reads as "no relationship" when the
+      // real answer is "this can't be computed on the current filtered data."
+      if (hasZeroVariance(xs) || hasZeroVariance(ys)) {
+        const zeroVarCol = hasZeroVariance(xs) ? targetProfile.name : featProfile.name;
+        excludedFeatures.push({
+          feature: featProfile.name,
+          reason: `Zero variance in "${zeroVarCol}" for the current filtered records (every value is identical) — correlation is mathematically undefined here, not zero.`
+        });
+        return;
+      }
+
       const r = getPearsonCorrelation(xs, ys);
       const sig = testCorrelationSignificance(r, N);
 
@@ -184,6 +200,18 @@ export function runSafeCompute(input: SafeComputeInput): SafeComputeResult {
 
       if (g1Count < 5 || g2Count < 5) {
         warnings.push(`Low subgroup counts for Point-Biserial correlation on "${featProfile.name}" (pos: ${g1Count}, neg: ${g2Count}). Minimum is 5 per group.`);
+      }
+
+      // Same zero-variance guard as the numeric-vs-numeric branch: if the
+      // current filters have collapsed either side to a single value
+      // (numeric variable constant, or every paired record landing in one
+      // category), Point-Biserial is undefined — exclude explicitly.
+      if (hasZeroVariance(numericVals) || g1Count === 0 || g2Count === 0) {
+        excludedFeatures.push({
+          feature: featProfile.name,
+          reason: `Zero variance for the current filtered records (${hasZeroVariance(numericVals) ? `"${featProfile.name}"` : `"${binaryProfile.name}"`} is constant) — Point-Biserial correlation is mathematically undefined here, not zero.`
+        });
+        return;
       }
 
       const pbRes = computePointBiserial(numericVals, categoryVals, mapping);

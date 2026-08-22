@@ -272,17 +272,15 @@ export function loadCSV(
       return reject(hErr);
     }
 
-    const rows: any[] = [];
-    let bytesSeen = 0;
     const CHUNK_SIZE = 1024 * 1024;
     let settled = false;
+    let workerProducedProgress = false;
+    let workerInitTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    // Hard safety-net timeout: a worker-based parse can hang forever with no
-    // callback at all if Web Worker creation (blob: URL) is blocked by the
-    // hosting page's CSP or a sandboxed preview iframe — the exact "stuck at
-    // Processing locally... 0%" freeze. Never let the UI hang indefinitely.
+    // Hard safety-net timeout: covers the whole parse (worker OR fallback
+    // attempt), so the UI can never hang indefinitely no matter what fails.
     const HARD_TIMEOUT_MS = 90_000;
-    const timeoutId = setTimeout(() => {
+    const hardTimeoutId = setTimeout(() => {
       if (settled) return;
       settled = true;
       reject(new Error(
@@ -292,51 +290,87 @@ export function loadCSV(
       ));
     }, HARD_TIMEOUT_MS);
 
-    Papa.parse(blob as File, {
-      // Disabled: worker-based parsing can silently hang with zero callbacks
-      // (no chunk/complete/error) inside sandboxed or CSP-restricted preview
-      // iframes. Chunked main-thread parsing still yields between chunks via
-      // Papa's own scheduling, so the UI stays responsive without a worker.
-      worker: false,
-      header: true,
-      dynamicTyping: true,
-      skipEmptyLines: true,
-      chunkSize: CHUNK_SIZE,
-      chunk: (results) => {
-        if (settled) return;
-        if (results.data && Array.isArray(results.data)) {
-          for (let i = 0; i < results.data.length; i++) {
-            rows.push(results.data[i]);
+    // A worker-based parse is the correct default — it keeps CSV parsing off
+    // the main thread entirely. But a Web Worker created via blob: URL can be
+    // silently blocked by the hosting page's CSP or a sandboxed preview
+    // iframe: PapaParse then never fires chunk/complete/error at all, which
+    // is what produced the "stuck at Processing locally... 0%" freeze. Rather
+    // than disabling workers outright (a real regression from the correct
+    // architecture — main-thread parsing still blocks between chunks), try
+    // the worker first and fall back to main-thread parsing ONLY if it
+    // produces zero progress within a short init window. A worker that's
+    // actually running will produce its first chunk well within this.
+    const WORKER_INIT_TIMEOUT_MS = 6_000;
+
+    const runParse = (useWorker: boolean) => {
+      const rows: any[] = [];
+      Papa.parse(blob as File, {
+        worker: useWorker,
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        chunkSize: CHUNK_SIZE,
+        chunk: (results) => {
+          if (settled) return;
+          if (useWorker) {
+            workerProducedProgress = true;
+            if (workerInitTimeoutId) {
+              clearTimeout(workerInitTimeoutId);
+              workerInitTimeoutId = null;
+            }
           }
+          if (results.data && Array.isArray(results.data)) {
+            for (let i = 0; i < results.data.length; i++) {
+              rows.push(results.data[i]);
+            }
+          }
+          if (onProgress && totalBytes > 0 && results.meta && typeof results.meta.cursor === 'number') {
+            onProgress(Math.min(1, results.meta.cursor / totalBytes));
+          }
+        },
+        complete: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(hardTimeoutId);
+          if (workerInitTimeoutId) clearTimeout(workerInitTimeoutId);
+          try {
+            const headerFields = rows.length > 0 ? Object.keys(rows[0] || {}) : [];
+            const versionSignature = typeof source === 'string'
+              ? source
+              : [filename, totalBytes, rows.length, headerFields.join(',')].join('|');
+            normalizeAndProfileData(filename, rows, versionSignature);
+            registerTable(filename, rows);
+            if (onProgress) onProgress(1);
+            resolve(rows);
+          } catch (e: any) {
+            reject(e);
+          }
+        },
+        error: (err: any) => {
+          // An explicit error means the parser IS running (worker or not) and
+          // hit a real problem — reject normally rather than falling back,
+          // since a fallback attempt would hit the same malformed data.
+          if (settled) return;
+          settled = true;
+          clearTimeout(hardTimeoutId);
+          if (workerInitTimeoutId) clearTimeout(workerInitTimeoutId);
+          reject(err);
         }
-        if (onProgress && totalBytes > 0 && results.meta && typeof results.meta.cursor === 'number') {
-          onProgress(Math.min(1, results.meta.cursor / totalBytes));
-        }
-      },
-      complete: () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutId);
-        try {
-          const headerFields = rows.length > 0 ? Object.keys(rows[0] || {}) : [];
-          const versionSignature = typeof source === 'string'
-            ? source
-            : [filename, totalBytes, rows.length, headerFields.join(',')].join('|');
-          normalizeAndProfileData(filename, rows, versionSignature);
-          registerTable(filename, rows);
-          if (onProgress) onProgress(1);
-          resolve(rows);
-        } catch (e: any) {
-          reject(e);
-        }
-      },
-      error: (err: any) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutId);
-        reject(err);
-      }
-    });
+      });
+    };
+
+    if (typeof Worker !== 'undefined') {
+      workerInitTimeoutId = setTimeout(() => {
+        if (settled || workerProducedProgress) return;
+        console.warn(`[loadCSV] Worker produced no progress within ${WORKER_INIT_TIMEOUT_MS}ms — falling back to main-thread parsing for "${filename}".`);
+        runParse(false);
+      }, WORKER_INIT_TIMEOUT_MS);
+      runParse(true);
+    } else {
+      // No Worker global at all (e.g. certain restricted embeds) — go
+      // straight to main-thread parsing, no point waiting out the timeout.
+      runParse(false);
+    }
   });
 }
 

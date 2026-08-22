@@ -96,6 +96,23 @@ export function chiSquarePValue(chiSq: number, df: number): number {
   // Since it's standard one-sided right-tailed survival function for Chi-Square:
   return Math.max(0, Math.min(1.0, 2 * pVal));
 }
+/**
+ * True if every value in the array is identical (zero variance). Correlation
+ * against a zero-variance variable is mathematically undefined — the
+ * denominator in Pearson's formula is zero. getPearsonCorrelation already
+ * guards against dividing by zero by returning 0 in that case, but 0 reads
+ * to a user as "no correlation found", indistinguishable from a genuine weak
+ * relationship. Callers should check this FIRST (on the paired/filtered
+ * subset actually being analyzed, not just the raw column — a column can
+ * have real variance overall but collapse to one value once the user's
+ * active filters are applied) and report a distinct degenerate/unsupported
+ * state instead of silently computing r=0.
+ */
+export function hasZeroVariance(values: number[]): boolean {
+  if (values.length === 0) return true;
+  const first = values[0];
+  return values.every(v => v === first);
+}
 
 export function getPearsonCorrelation(xs: number[], ys: number[]): number {
   const n = xs.length;

@@ -58,7 +58,20 @@ function getFuzzySimilarity(s1: string, s2: string): number {
   }
 
   const jaro = (matches / len1 + matches / len2 + (matches - transpositions / 2) / matches) / 3;
-  return parseFloat(jaro.toFixed(3));
+
+  // Winkler prefix bonus: up to the first 4 characters, standard scaling
+  // factor 0.1 (the conventional constants from Winkler's original paper).
+  let prefixLen = 0;
+  const maxPrefix = Math.min(4, len1, len2);
+  while (prefixLen < maxPrefix && s1[prefixLen] === s2[prefixLen]) prefixLen++;
+
+  // Hard gate: no shared prefix at all means this is not a plausible
+  // abbreviation/typo relationship, regardless of how the base Jaro score
+  // came out from scattered character overlap.
+  if (prefixLen === 0) return 0;
+
+  const jaroWinkler = jaro + prefixLen * 0.1 * (1 - jaro);
+  return parseFloat(jaroWinkler.toFixed(3));
 }
 
 export const ColumnResolver = {

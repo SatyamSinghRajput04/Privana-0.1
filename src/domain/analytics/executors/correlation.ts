@@ -4,12 +4,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AnalysisPlan, ExecutorResult } from '../types';
-import { 
-  getPearsonCorrelation, 
-  getSpearmanCorrelation, 
-  resolveBinaryMapping, 
-  computePointBiserial, 
-  testCorrelationSignificance 
+import {
+  getPearsonCorrelation,
+  getSpearmanCorrelation,
+  resolveBinaryMapping,
+  computePointBiserial,
+  testCorrelationSignificance,
+  hasZeroVariance
 } from '../../safeCompute/relationshipRanker';
 
 // Maximum scatter overlay points for visualization. Statistics (r, p-value)
@@ -47,27 +48,23 @@ export const CorrelationExecutor = {
       return { status: 'partial_missing', rows: [] };
     }
 
-    const metricVals: any[] = [];
-    const targetVals: any[] = [];
-    let isMetricNumeric = true;
-    let isTargetNumeric = true;
+    // Filter out missing values
+    const cleanRows = rows.filter(r => 
+      r[metric] !== null && r[metric] !== undefined && r[metric] !== '' &&
+      r[target] !== null && r[target] !== undefined && r[target] !== ''
+    );
 
-    for (let i = 0; i < rows.length; i++) {
-      const rm = rows[i][metric];
-      const rt = rows[i][target];
-      if (rm !== null && rm !== undefined && rm !== '' &&
-          rt !== null && rt !== undefined && rt !== '') {
-        metricVals.push(rm);
-        targetVals.push(rt);
-        if (isMetricNumeric && isNaN(Number(rm))) isMetricNumeric = false;
-        if (isTargetNumeric && isNaN(Number(rt))) isTargetNumeric = false;
-      }
-    }
-
-    const cleanRowCount = metricVals.length;
-    if (cleanRowCount < 3) {
+    if (cleanRows.length < 3) {
       return { status: 'partial_missing', rows: [], metadata: { reason: 'At least 3 complete records are required.' } };
     }
+
+    // Extract values
+    const metricVals = cleanRows.map(r => r[metric]);
+    const targetVals = cleanRows.map(r => r[target]);
+
+    // Check if numeric
+    const isMetricNumeric = metricVals.every(v => !isNaN(Number(v)));
+    const isTargetNumeric = targetVals.every(v => !isNaN(Number(v)));
 
     let rVal = 0;
     let method = 'Pearson';
@@ -80,11 +77,26 @@ export const CorrelationExecutor = {
       // Both numeric -> Pearson/Spearman
       const xs = metricVals.map(Number);
       const ys = targetVals.map(Number);
-      
+
+      // Zero variance in the actually-analyzed (post-filter) values makes
+      // correlation mathematically undefined — report that plainly instead
+      // of a misleading r=0 ("no correlation") that a user can't tell apart
+      // from a genuinely weak relationship.
+      if (hasZeroVariance(xs) || hasZeroVariance(ys)) {
+        const zeroVarCol = hasZeroVariance(xs) ? metric : target;
+        return {
+          status: 'partial_missing',
+          rows: [],
+          metadata: {
+            reason: `"${zeroVarCol}" has zero variance in the current data (every value is identical) — correlation is mathematically undefined here, not zero. This can happen if active filters have narrowed the dataset to a single value.`
+          }
+        };
+      }
+
       // Check the original question text for Spearman request (planId is auto-generated and never contains 'spearman')
       const originalQ = ((plan as any)._originalQuestion || '').toLowerCase();
       const useSpearman = originalQ.includes('spearman') || (plan as any).source === 'spearman';
-      
+
       if (useSpearman) {
         rVal = getSpearmanCorrelation(xs, ys);
         method = 'Spearman';
@@ -93,7 +105,7 @@ export const CorrelationExecutor = {
         method = 'Pearson';
       }
 
-      const sig = testCorrelationSignificance(rVal, cleanRowCount);
+      const sig = testCorrelationSignificance(rVal, cleanRows.length);
       pVal = sig.p;
     } else if (isMetricNumeric || isTargetNumeric) {
       // One numeric, one categorical. Check if categorical is binary
@@ -102,13 +114,25 @@ export const CorrelationExecutor = {
 
       const uniqueCats = Array.from(new Set(catVals));
       if (uniqueCats.length === 2) {
-        // Binary vs Numeric -> Point-Biserial
+        // Binary vs Numeric -> Point-Biserial. (The categorical side is
+        // already guaranteed non-degenerate here — uniqueCats.length === 2 —
+        // only the numeric side needs a zero-variance check.)
+        if (hasZeroVariance(numVals)) {
+          return {
+            status: 'partial_missing',
+            rows: [],
+            metadata: {
+              reason: `"${isMetricNumeric ? metric : target}" has zero variance in the current data (every value is identical) — Point-Biserial correlation is mathematically undefined here, not zero.`
+            }
+          };
+        }
+
         binaryMapping = resolveBinaryMapping(uniqueCats);
         const pb = computePointBiserial(numVals, catVals, binaryMapping);
         rVal = pb.correlation;
         method = 'Point-Biserial';
         
-        const sig = testCorrelationSignificance(rVal, cleanRowCount);
+        const sig = testCorrelationSignificance(rVal, cleanRows.length);
         pVal = sig.p;
 
         if (binaryMapping.isAmbiguous) {
@@ -134,48 +158,28 @@ export const CorrelationExecutor = {
     }
 
     // ── Scatter overlay (downsampled for DOM safety) ─────────────────────
-    // Statistics above used ALL valid points. Visual scatter is capped at
+    // Statistics above used ALL cleanRows. Visual scatter is capped at
     // MAX_SCATTER_POINTS via reservoir sampling to preserve uniform coverage.
-    let points: { x: number; y: number }[] = [];
-    
-    const projectArrays = (i: number): { x: number; y: number } => {
-       let x = Number(metricVals[i]);
-       let y = Number(targetVals[i]);
-       if (method === 'Point-Biserial' && binaryMapping) {
-         if (!isMetricNumeric) {
-           x = (metricVals[i] === binaryMapping.posValue || String(metricVals[i]) === String(binaryMapping.posValue)) ? 1 : 0;
-         }
-         if (!isTargetNumeric) {
-           y = (targetVals[i] === binaryMapping.posValue || String(targetVals[i]) === String(binaryMapping.posValue)) ? 1 : 0;
-         }
-       }
-       return { x, y };
-    };
-
-    if (cleanRowCount <= MAX_SCATTER_POINTS) {
-      for (let i = 0; i < cleanRowCount; i++) {
-        points.push(projectArrays(i));
-      }
+    let points: { x: number; y: number }[];
+    if (cleanRows.length <= MAX_SCATTER_POINTS) {
+      points = cleanRows.map(r => projectPoint(r, metric, target, method, binaryMapping, isMetricNumeric, isTargetNumeric));
     } else {
       // Reservoir sampling: first N, then probabilistic replacement
-      const reservoirIndices = new Array(MAX_SCATTER_POINTS);
-      for (let i = 0; i < MAX_SCATTER_POINTS; i++) reservoirIndices[i] = i;
-      for (let i = MAX_SCATTER_POINTS; i < cleanRowCount; i++) {
+      const reservoir = cleanRows.slice(0, MAX_SCATTER_POINTS);
+      for (let i = MAX_SCATTER_POINTS; i < cleanRows.length; i++) {
         const j = Math.floor(Math.random() * (i + 1));
-        if (j < MAX_SCATTER_POINTS) reservoirIndices[j] = i;
+        if (j < MAX_SCATTER_POINTS) reservoir[j] = cleanRows[i];
       }
-      for (let j = 0; j < MAX_SCATTER_POINTS; j++) {
-        points.push(projectArrays(reservoirIndices[j]));
-      }
+      points = reservoir.map(r => projectPoint(r, metric, target, method, binaryMapping, isMetricNumeric, isTargetNumeric));
     }
 
     return {
-      status: cleanRowCount < 5 ? 'partial_small_n' : 'success',
+      status: cleanRows.length < 5 ? 'partial_small_n' : 'success',
       rows: [{
         r: rVal,
         pValue: pVal,
         method,
-        sampleSize: cleanRowCount,
+        sampleSize: cleanRows.length,
         points,
       }],
       metadata: {

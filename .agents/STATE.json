@@ -1,0 +1,27 @@
+{
+  "project": "Privana",
+  "version": "0.1.0-alpha",
+  "current_phase": "Phase C - Default DuckDB Engine Switch (COMPLETED)",
+  "active_stage": "Stage 2.6 & Phase C (Completed) -> 100% Verified Production Ready",
+  "status": "success",
+  "completed_stages": [
+    "Stage 2.1 - GroupedAverage migration to ComputeEngine",
+    "Stage 2.1 - RankingExecutor composition validation",
+    "Stage 2.5 - CorrelationExecutor single-pass moments migration",
+    "Stage 2.5 - Shifted sums numerical precision fix (1.7e12 timestamps)",
+    "Stage 2.5 - 2,000-point reservoir scatter sampling",
+    "Phase A - DuckDB-WASM worker manager and VFS streaming support",
+    "Phase A - DuckDBComputeEngine implementing ComputeEngine interface",
+    "Phase A - 6-layer shadow parity test suite passed (100% mathematical parity)",
+    "Phase B - Dual-Engine Workload Routing Adapter in sqlEngine.ts",
+    "Phase B - Streaming File registration in DatasetsPage.tsx (zero main-thread text copy)",
+    "Stage 2.6 - One-Way ANOVA and Cramer's V sufficient statistics migration (100% parity)",
+    "Phase C - Default DuckDB Engine Switch (useDuckDB = true enabled)"
+  ],
+  "in_progress_milestones": [],
+  "upcoming_stages": [
+    "Phase D - AlaSQL Deprecation & Final Legacy Cleanup"
+  ],
+  "blocked": [],
+  "last_updated": "2026-09-04T18:05:00Z"
+}

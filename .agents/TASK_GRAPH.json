@@ -1,0 +1,28 @@
+{
+  "project": "Privana",
+  "task_graph": {
+    "nodes": [
+      { "id": "task_correctness", "name": "Mathematical Correctness & Zero-Variance Guards", "status": "completed" },
+      { "id": "task_compute_engine_seam", "name": "ComputeEngine Seam Definition", "status": "completed" },
+      { "id": "task_correlation_migration", "name": "Correlation Shifted Moments Migration (Stage 2.5)", "status": "completed" },
+      { "id": "task_feature_importance", "name": "Feature Importance & ANOVA Migration (Stage 2.6)", "status": "pending" },
+      { "id": "task_duckdb_worker", "name": "DuckDB-WASM Dedicated Web Worker", "status": "pending" },
+      { "id": "task_duckdb_compute_engine", "name": "DuckDBComputeEngine Implementation", "status": "pending" },
+      { "id": "task_golden_parity", "name": "6-Layer Golden-Result Parity Test Suite", "status": "pending" },
+      { "id": "task_dual_adapter", "name": "Dual-Engine Feature-Flagged Adapter (sqlEngine.ts)", "status": "pending" },
+      { "id": "task_empirical_benchmark", "name": "Empirical Benchmark (100k, 500k, 1M rows)", "status": "pending" },
+      { "id": "task_alasql_deprecation", "name": "AlaSQL Deprecation & Final Cleanup", "status": "pending" }
+    ],
+    "dependencies": [
+      { "from": "task_correctness", "to": "task_compute_engine_seam" },
+      { "from": "task_compute_engine_seam", "to": "task_correlation_migration" },
+      { "from": "task_correlation_migration", "to": "task_feature_importance" },
+      { "from": "task_compute_engine_seam", "to": "task_duckdb_worker" },
+      { "from": "task_duckdb_worker", "to": "task_duckdb_compute_engine" },
+      { "from": "task_duckdb_compute_engine", "to": "task_golden_parity" },
+      { "from": "task_golden_parity", "to": "task_dual_adapter" },
+      { "from": "task_dual_adapter", "to": "task_empirical_benchmark" },
+      { "from": "task_empirical_benchmark", "to": "task_alasql_deprecation" }
+    ]
+  }
+}

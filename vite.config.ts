@@ -21,6 +21,9 @@ export default defineConfig(async () => {
               if (id.includes('alasql')) {
                 return 'vendor-alasql';
               }
+              if (id.includes('@duckdb') || id.includes('apache-arrow')) {
+                return 'vendor-duckdb';
+              }
               if (id.includes('recharts') || id.includes('d3')) {
                 return 'vendor-charts';
               }

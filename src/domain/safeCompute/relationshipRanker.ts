@@ -130,6 +130,49 @@ export function getPearsonCorrelation(xs: number[], ys: number[]): number {
   return denX === 0 || denY === 0 ? 0 : num / Math.sqrt(denX * denY);
 }
 
+/**
+ * Pearson's r computed from pairwise sufficient statistics (the
+ * "computational formula") instead of from materialized value arrays:
+ *
+ *   r = (n·Σxy − Σx·Σy) / sqrt( (n·Σx² − (Σx)²) · (n·Σy² − (Σy)²) )
+ *
+ * Mathematically identical to getPearsonCorrelation() above; the difference
+ * is only that the caller can supply running sums accumulated in a single
+ * allocation-free pass (and, in a future columnar engine, computed entirely
+ * in SQL) rather than two parallel arrays.
+ *
+ * This function lives in the statistics layer on purpose. The ComputeEngine
+ * supplies the sums and never learns what a correlation is; interpreting
+ * those sums — this formula, the zero-variance guard, significance testing —
+ * stays here, shared by every engine implementation so the math is written
+ * and tested exactly once.
+ *
+ * Numerical note: this formula subtracts two large, nearly-equal quantities,
+ * so it is only safe on well-conditioned input. Measured on data whose true
+ * r is 0.9976, feeding it RAW sums returns 0.408 at magnitude 1e9 and 0.000
+ * at 1e12 — catastrophic cancellation, not rounding noise. PairMoments
+ * therefore supplies SHIFTED sums (each value reduced by a per-column
+ * constant), which restores conditioning; correlation is shift-invariant so
+ * the result is unchanged, and this function needs no adjustment for the
+ * shift. Do not call it with unshifted sums accumulated elsewhere.
+ */
+export function pearsonFromMoments(m: {
+  count: number;
+  sumX: number;
+  sumY: number;
+  sumXY: number;
+  sumX2: number;
+  sumY2: number;
+}): number {
+  const n = m.count;
+  if (n < 2) return 0;
+  const num = n * m.sumXY - m.sumX * m.sumY;
+  const denX = n * m.sumX2 - m.sumX * m.sumX;
+  const denY = n * m.sumY2 - m.sumY * m.sumY;
+  if (denX <= 0 || denY <= 0) return 0;
+  return num / Math.sqrt(denX * denY);
+}
+
 export function getRanks(values: number[]): number[] {
   const sorted = values.map((val, idx) => ({ val, idx })).sort((a, b) => a.val - b.val);
   const ranks = new Array(values.length);
@@ -215,6 +258,64 @@ export function computePointBiserial(
   return { correlation: r, direction };
 }
 
+/**
+ * Computes One-Way ANOVA F-statistic and Eta-squared from sufficient statistics
+ * (group counts, group sums, and total sum-of-squares) rather than materializing raw arrays.
+ */
+export function anovaFromSufficientStats(
+  groups: { category: string; count: number; sum: number }[],
+  totalCount: number,
+  totalSum: number,
+  totalSumSq: number
+): {
+  fValue: number;
+  etaSquared: number;
+  pValue: number;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const k = groups.length;
+  const N = totalCount;
+
+  if (k < 2 || N < 2) {
+    return { fValue: 0, etaSquared: 0, pValue: 1.0, warnings: ['ANOVA requires at least 2 distinct categories with valid records.'] };
+  }
+
+  for (const g of groups) {
+    if (g.count < 5) {
+      warnings.push(`Category "${g.category}" contains only ${g.count} rows (recommended minimum is 5). Statistical reliability is low.`);
+    }
+  }
+
+  const grandMean = totalSum / N;
+  const ssTotal = totalSumSq - (totalSum * totalSum) / N;
+
+  let ssBetween = 0;
+  for (const g of groups) {
+    if (g.count > 0) {
+      const groupMean = g.sum / g.count;
+      ssBetween += g.count * Math.pow(groupMean - grandMean, 2);
+    }
+  }
+
+  const ssWithin = Math.max(0, ssTotal - ssBetween);
+  const df1 = k - 1;
+  const df2 = N - k;
+
+  if (df2 <= 0) {
+    return { fValue: 0, etaSquared: 0, pValue: 1.0, warnings: [...warnings, 'Not enough degrees of freedom.'] };
+  }
+
+  const msBetween = ssBetween / df1;
+  const msWithin = ssWithin / df2;
+
+  const fValue = msWithin === 0 ? 0 : msBetween / msWithin;
+  const etaSquared = ssTotal <= 0 ? 0 : Math.min(1.0, Math.max(0, ssBetween / ssTotal));
+  const pValue = fDistPValue(fValue, df1, df2);
+
+  return { fValue, etaSquared, pValue, warnings };
+}
+
 // 1. One-Way ANOVA Solver
 export function computeOneWayAnova(
   numericVals: number[],
@@ -279,6 +380,76 @@ export function computeOneWayAnova(
   const pValue = fDistPValue(fValue, df1, df2);
 
   return { fValue, etaSquared, pValue, warnings };
+}
+
+/**
+ * Computes Cramer's V and Chi-Square statistic from a pre-aggregated contingency table
+ * rather than materializing raw categorical arrays.
+ */
+export function cramersVFromContingency(
+  contingencyCells: { rowCat: string; colCat: string; count: number }[],
+  totalN: number
+): {
+  chiSq: number;
+  cramersV: number;
+  pValue: number;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const rowTotals: Record<string, number> = {};
+  const colTotals: Record<string, number> = {};
+  const observed: Record<string, number> = {};
+
+  const rowSet = new Set<string>();
+  const colSet = new Set<string>();
+
+  for (const cell of contingencyCells) {
+    const r = cell.rowCat;
+    const c = cell.colCat;
+    rowSet.add(r);
+    colSet.add(c);
+    rowTotals[r] = (rowTotals[r] || 0) + cell.count;
+    colTotals[c] = (colTotals[c] || 0) + cell.count;
+    observed[`${r}||${c}`] = cell.count;
+  }
+
+  const r = rowSet.size;
+  const c = colSet.size;
+
+  if (r < 2 || c < 2 || totalN < 2) {
+    return { chiSq: 0, cramersV: 0, pValue: 1.0, warnings: ['Chi-Square requires variables with at least 2 distinct categories.'] };
+  }
+
+  let chiSq = 0;
+  let cellViolationsCount = 0;
+
+  for (const catA of rowSet) {
+    const r_i = rowTotals[catA] || 0;
+    for (const catB of colSet) {
+      const c_j = colTotals[catB] || 0;
+      const expected = (r_i * c_j) / totalN;
+
+      if (expected < 5) {
+        cellViolationsCount++;
+      }
+
+      const obs = observed[`${catA}||${catB}`] || 0;
+      if (expected > 0) {
+        chiSq += Math.pow(obs - expected, 2) / expected;
+      }
+    }
+  }
+
+  if (cellViolationsCount > 0) {
+    warnings.push(`Contingency table contains ${cellViolationsCount} cell(s) with an expected frequency < 5. Cramer's V results may be unstable.`);
+  }
+
+  const denominator = totalN * Math.min(r - 1, c - 1);
+  const cramersV = denominator === 0 ? 0 : Math.sqrt(chiSq / denominator);
+  const df = (r - 1) * (c - 1);
+  const pValue = chiSquarePValue(chiSq, df);
+
+  return { chiSq, cramersV, pValue, warnings };
 }
 
 // 2. Chi-Square & Cramer's V Solver

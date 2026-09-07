@@ -1,5 +1,90 @@
 import alasql from 'alasql';
 import Papa from 'papaparse';
+import { registerVfsFile, registerMemoryTable, getDuckDBConnection } from '../domain/compute/duckdb/duckdbWorker';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DUAL-ENGINE TABLE REGISTRY
+// ─────────────────────────────────────────────────────────────────────────────
+export const DUCKDB_TABLES = new Set<string>();
+export const DUCKDB_TABLE_SAMPLES = new Map<string, any[]>();
+export const DUCKDB_ROW_COUNTS = new Map<string, number>();
+
+/**
+ * Normalizes DuckDB data types to standard high-level SQL types.
+ */
+export function normalizeDuckDBType(duckType: string): string {
+  const t = (duckType || '').toUpperCase();
+  if (t.includes('INT')) return 'INTEGER';
+  if (t.includes('DECIMAL') || t.includes('FLOAT') || t.includes('DOUBLE') || t.includes('REAL') || t.includes('NUMERIC')) return 'DECIMAL';
+  if (t.includes('DATE')) return 'DATE';
+  if (t.includes('TIME')) return 'TIMESTAMP';
+  if (t.includes('BOOL')) return 'BOOLEAN';
+  return 'VARCHAR';
+}
+
+/**
+ * Registers a native File into DuckDB-WASM VFS with streaming BROWSER_FILEREADER.
+ */
+export async function registerDuckDBFile(tableName: string, file: File): Promise<void> {
+  const name = getSqlTableName(tableName);
+  await registerVfsFile(name, file);
+  DUCKDB_TABLES.add(name);
+}
+
+/**
+ * Attaches a bounded sample and schema profile for a DuckDB table.
+ */
+export function setDuckDBSample(
+  tableName: string,
+  sampleRows: any[],
+  rowCount: number,
+  columnsMeta?: Array<{ name: string; type: string }>
+): void {
+  const name = getSqlTableName(tableName);
+  DUCKDB_TABLES.add(name);
+  DUCKDB_TABLE_SAMPLES.set(name, sampleRows);
+  DUCKDB_ROW_COUNTS.set(name, rowCount);
+
+  const cols: ColumnSpec[] = (columnsMeta && columnsMeta.length > 0)
+    ? columnsMeta.map(c => {
+        const normType = c.type === 'INTEGER' ? 'integer'
+          : c.type === 'DECIMAL' ? 'number'
+          : c.type === 'DATE' ? 'date'
+          : c.type === 'TIMESTAMP' ? 'timestamp'
+          : c.type === 'BOOLEAN' ? 'boolean'
+          : 'string';
+        const lowerName = c.name.toLowerCase();
+        const role = (lowerName === 'id' || lowerName.endsWith('_id') || lowerName.endsWith('id')) ? 'id'
+          : (normType === 'number' || normType === 'integer') ? 'metric'
+          : (normType === 'date' || normType === 'timestamp') ? 'time'
+          : 'dimension';
+        return {
+          name: c.name,
+          type: normType,
+          nullable: true,
+          role,
+          nullCount: 0
+        };
+      })
+    : (sampleRows.length > 0
+        ? Object.keys(sampleRows[0]).map(colName => ({
+            name: colName,
+            type: 'string' as const,
+            nullable: true,
+            role: 'dimension' as const,
+            nullCount: 0
+          }))
+        : []);
+
+  SCHEMA_PROFILES[name] = {
+    datasetId: name,
+    versionHash: `${name}_${rowCount}_${cols.length}`,
+    columns: cols,
+    rowCount,
+    ingestionTimestamp: Date.now()
+  };
+  SCHEMA_PROFILES[tableName] = SCHEMA_PROFILES[name];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CUSTOM FUNCTIONS
@@ -468,18 +553,36 @@ export interface ColumnInfo {
 
 export function getTableData(tableName: string): any[] {
   const tbl = getSqlTableName(tableName);
+  if (DUCKDB_TABLES.has(tbl)) {
+    return DUCKDB_TABLE_SAMPLES.get(tbl) || [];
+  }
   const tableObj = (alasql.tables as any)[tbl];
   return tableObj?.data || [];
 }
 
 export function getTableSchema(tableName: string): ColumnInfo[] {
   const tbl = getSqlTableName(tableName);
-  const tableObj = (alasql.tables as any)[tbl];
-  if (!tableObj || !tableObj.data || tableObj.data.length === 0) return [];
+  const profile = SCHEMA_PROFILES[tableName] || SCHEMA_PROFILES[tbl];
+  if (profile && profile.columns && profile.columns.length > 0) {
+    const sampleRows = DUCKDB_TABLE_SAMPLES.get(tbl) || [];
+    return profile.columns.map(c => {
+      const colSample = sampleRows.length > 0 ? sampleRows[0][c.name] : null;
+      const mappedType = (c.type === 'number' || c.type === 'integer') ? 'number'
+        : (c.type === 'date' || c.type === 'timestamp') ? 'date'
+        : (c.type === 'boolean') ? 'boolean'
+        : 'string';
+      return {
+        name: c.name,
+        type: mappedType as any,
+        sample: colSample
+      };
+    });
+  }
 
-  const sampleRows = tableObj.data.slice(0, 20);
+  const sampleRows = DUCKDB_TABLE_SAMPLES.get(tbl) || (alasql.tables as any)[tbl]?.data?.slice(0, 20) || [];
+  if (sampleRows.length === 0) return [];
+
   const columns = Object.keys(sampleRows[0]);
-
   return columns.map(name => {
     const values = sampleRows.map((r: any) => r[name]).filter((v: any) => v != null && v !== '');
     if (values.length === 0) return { name, type: 'unknown' as const, sample: null };
@@ -500,12 +603,18 @@ export function getTableSchema(tableName: string): ColumnInfo[] {
 
 export function getTableRowCount(tableName: string): number {
   const tbl = getSqlTableName(tableName);
+  if (DUCKDB_ROW_COUNTS.has(tbl)) {
+    return DUCKDB_ROW_COUNTS.get(tbl)!;
+  }
+  const profile = SCHEMA_PROFILES[tableName] || SCHEMA_PROFILES[tbl];
+  if (profile && profile.rowCount > 0) return profile.rowCount;
   const tableObj = (alasql.tables as any)[tbl];
   return tableObj?.data?.length || 0;
 }
 
 export function isTableLoaded(tableName: string): boolean {
   const tbl = getSqlTableName(tableName);
+  if (DUCKDB_TABLES.has(tbl)) return true;
   const tableObj = (alasql.tables as any)[tbl];
   return !!(tableObj && tableObj.data && tableObj.data.length > 0);
 }
@@ -517,15 +626,17 @@ const ANALYSIS_ROW_CAP = 50_000;
 
 /**
  * Returns rows for the analytics pipeline. Reads directly off the AlaSQL table's
- * backing array (skips the SQL engine's SELECT * overhead) and, for tables above
- * maxRows, returns a reservoir-sampled representative subset instead of the full
- * dataset. Feeding an unbounded 100k+/1M+ row array into the synchronous,
- * main-thread analytics pipeline is what causes the "Analyze" button to freeze
- * the tab on large uploads — this keeps the pipeline's input bounded regardless
- * of dataset size. Use getTableRowCount() for the true total row count.
+ * backing array or DuckDB bounded sample cache (skips the SQL engine's SELECT * overhead)
+ * and, for tables above maxRows, returns a reservoir-sampled representative subset.
  */
 export function getTableRows(tableName: string, maxRows: number = ANALYSIS_ROW_CAP): any[] {
   const tbl = getSqlTableName(tableName);
+  if (DUCKDB_TABLES.has(tbl)) {
+    const sample = DUCKDB_TABLE_SAMPLES.get(tbl) || [];
+    if (sample.length <= maxRows) return sample;
+    return sample.slice(0, maxRows);
+  }
+
   const tableObj = (alasql.tables as any)[tbl];
   const data: any[] = tableObj?.data || [];
 
@@ -557,6 +668,11 @@ export function dropTable(name: string): void {
   try { alasql('DROP TABLE IF EXISTS ' + sqlName); } catch { /* ignore */ }
   delete (alasql.tables as any)[sqlName];
   delete TABLE_OWNERS[sqlName];
+  DUCKDB_TABLES.delete(sqlName);
+  DUCKDB_TABLE_SAMPLES.delete(sqlName);
+  DUCKDB_ROW_COUNTS.delete(sqlName);
+  delete SCHEMA_PROFILES[sqlName];
+  delete SCHEMA_PROFILES[name];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

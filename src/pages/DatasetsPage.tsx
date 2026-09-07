@@ -2,7 +2,8 @@ import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import type { Page } from '../App';
-import { loadCSV, loadJSON, setTableOwner } from '../lib/sqlEngine';
+import { loadCSV, loadJSON, setTableOwner, registerDuckDBFile, getSqlTableName, setDuckDBSample, normalizeDuckDBType } from '../lib/sqlEngine';
+import { getDuckDBConnection } from '../domain/compute/duckdb/duckdbWorker';
 import { DatasetValidator } from '../domain/validator/validator';
 import { useVaultStore } from '../store/useVaultStore';
 import { localDB } from '../lib/indexedDb';
@@ -77,6 +78,39 @@ const getSampleColumns = (name: string) => {
     { name: 'date', type: 'DATE', is_he: false },
   ];
 };
+
+// Polyfill BigInt JSON serialization so JSON.stringify never crashes on BigInts
+if (typeof BigInt !== 'undefined' && !(BigInt.prototype as any).toJSON) {
+  (BigInt.prototype as any).toJSON = function () {
+    const n = Number(this);
+    return Number.isSafeInteger(n) ? n : this.toString();
+  };
+}
+
+/**
+ * Safely converts an Apache Arrow Table into an array of plain JavaScript objects,
+ * guaranteeing BigInt values are converted to safe numbers/strings without throwing.
+ */
+function arrowTableToPlainObjects(table: any): any[] {
+  if (!table || !table.numRows) return [];
+  const fields = table.schema?.fields?.map((f: any) => f.name) || [];
+  const rows: any[] = [];
+  for (let i = 0; i < table.numRows; i++) {
+    const rowObj: Record<string, any> = {};
+    for (const field of fields) {
+      const val = table.getChild(field)?.get(i);
+      if (typeof val === 'bigint') {
+        rowObj[field] = (val <= Number.MAX_SAFE_INTEGER && val >= Number.MIN_SAFE_INTEGER)
+          ? Number(val)
+          : val.toString();
+      } else {
+        rowObj[field] = val;
+      }
+    }
+    rows.push(rowObj);
+  }
+  return rows;
+}
 
 export default function DatasetsPage({ setPage }: P) {
   const { 
@@ -173,49 +207,134 @@ export default function DatasetsPage({ setPage }: P) {
       // Yield control to browser rendering loop so UI spinner displays immediately
       await new Promise(r => setTimeout(r, 20));
 
-      let parsedRows: any[] = [];
       const isJson = f.name.toLowerCase().endsWith('.json');
-      const rawText = await f.text();
+      let realColsMeta: any[] = [];
+      let totalRowCount = 0;
+      let sampleRows: any[] = [];
 
       if (isJson) {
-        parsedRows = loadJSON(f.name, rawText);
+        const rawText = await f.text();
+        const parsedRows = loadJSON(f.name, rawText);
+        totalRowCount = parsedRows.length;
+        sampleRows = parsedRows.slice(0, 50);
+
+        const profile = DatasetValidator.profile(parsedRows, f.name);
+        if (profile.shape === 'metadata') {
+          throw new Error(
+            `"${f.name}" appears to be a dataset metadata / descriptor file. ` +
+            `This file describes the dataset but contains NO actual data rows.\n\n` +
+            `Please upload the real records dataset instead.`
+          );
+        }
+        if (profile.shape === 'corrupted' || profile.shape === 'empty') {
+          throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
+        }
+
+        realColsMeta = parsedRows.length > 0
+          ? Object.keys(parsedRows[0]).map(colName => {
+              const samples = parsedRows.slice(0, 10).map(r => r[colName]).filter(v => v != null && v !== '');
+              const numCount = samples.filter(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v)))).length;
+              let colType = 'VARCHAR';
+              if (numCount > samples.length * 0.6) {
+                const firstNum = samples.find(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v))));
+                colType = firstNum !== undefined && Number.isInteger(Number(firstNum)) ? 'INTEGER' : 'DECIMAL';
+              }
+              return { name: colName, type: colType, is_he: false };
+            })
+          : getSampleColumns(f.name);
+
+        if (f.size <= 20 * 1024 * 1024) {
+          await localDB.saveDatasetCSV(f.name, rawText);
+        }
       } else {
-        parsedRows = await loadCSV(f.name, f, (frac) => setUploadProgress(frac));
+        // Zero-Heap DuckDB Ingestion for CSV / Parquet / Tabular files
+        try {
+          // 1. Register native File handle into DuckDB VFS (Streaming, zero main-thread string copy)
+          await registerDuckDBFile(f.name, f);
+          const conn = await getDuckDBConnection();
+          const tbl = getSqlTableName(f.name);
+
+          // 2. Query DuckDB directly for column schema, exact row count, and 50-row micro-sample
+          const descRes = await conn.query(`DESCRIBE "${tbl}";`);
+          const descRows = arrowTableToPlainObjects(descRes);
+
+          const countRes = await conn.query(`SELECT COUNT(*)::BIGINT AS total FROM "${tbl}";`);
+          const rawTotal = countRes.getChild('total')?.get(0);
+          totalRowCount = typeof rawTotal === 'bigint' ? Number(rawTotal) : Number(rawTotal ?? 0);
+
+          const previewRes = await conn.query(`SELECT * FROM "${tbl}" LIMIT 50;`);
+          sampleRows = arrowTableToPlainObjects(previewRes);
+
+          // 3. Profile and validate dataset shape/integrity on 50-row sample (< 1ms)
+          const profile = DatasetValidator.profile(sampleRows, f.name);
+          if (profile.shape === 'metadata') {
+            throw new Error(
+              `"${f.name}" appears to be a dataset metadata / descriptor file. ` +
+              `This file describes the dataset but contains NO actual data rows.\n\n` +
+              `Please upload the real records dataset instead.`
+            );
+          }
+          if (profile.shape === 'corrupted' || (profile.shape === 'empty' && totalRowCount === 0)) {
+            throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
+          }
+
+          // 4. Derive normalized columns metadata
+          realColsMeta = descRows.map((col: any) => {
+            const colName = String(col.column_name);
+            const rawType = String(col.column_type);
+            const normalizedType = normalizeDuckDBType(rawType);
+            return { name: colName, type: normalizedType, is_he: false };
+          });
+
+          // 5. Store bounded sample in sqlEngine for metadata bridges
+          setDuckDBSample(f.name, sampleRows, totalRowCount, realColsMeta);
+
+          // 6. Save sample CSV header in IndexedDB for fast reload previews without storing 100MB
+          if (sampleRows.length > 0) {
+            const headerLine = Object.keys(sampleRows[0]).join(',');
+            const sampleLines = sampleRows.slice(0, 10).map(r => 
+              Object.values(r).map(v => typeof v === 'string' && v.includes(',') ? `"${v}"` : String(v ?? '')).join(',')
+            ).join('\n');
+            await localDB.saveDatasetCSV(f.name, headerLine + '\n' + sampleLines);
+          }
+        } catch (duckErr: any) {
+          console.warn('[DatasetsPage] DuckDB VFS ingestion failed:', duckErr);
+          // If a file is over 20MB, NEVER fall back to PapaParse on the main thread!
+          if (f.size > 20 * 1024 * 1024) {
+            throw new Error(
+              `DuckDB could not stream "${f.name}": ${duckErr.message || duckErr}. ` +
+              `Main-thread fallback is disabled for files over 20MB to prevent browser freezing.`
+            );
+          }
+          // Only small files (< 20MB) may use the fallback
+          const parsedRows = await loadCSV(f.name, f, (frac) => setUploadProgress(frac));
+          totalRowCount = parsedRows.length;
+          sampleRows = parsedRows.slice(0, 50);
+
+          const profile = DatasetValidator.profile(parsedRows, f.name);
+          if (profile.shape === 'metadata') {
+            throw new Error(`"${f.name}" appears to be a dataset metadata / descriptor file.`);
+          }
+          if (profile.shape === 'corrupted' || profile.shape === 'empty') {
+            throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
+          }
+
+          realColsMeta = parsedRows.length > 0
+            ? Object.keys(parsedRows[0]).map(colName => {
+                const samples = parsedRows.slice(0, 10).map(r => r[colName]).filter(v => v != null && v !== '');
+                const numCount = samples.filter(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v)))).length;
+                let colType = 'VARCHAR';
+                if (numCount > samples.length * 0.6) {
+                  const firstNum = samples.find(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v))));
+                  colType = firstNum !== undefined && Number.isInteger(Number(firstNum)) ? 'INTEGER' : 'DECIMAL';
+                }
+                return { name: colName, type: colType, is_he: false };
+              })
+            : getSampleColumns(f.name);
+        }
       }
 
-      // Profile and validate dataset shape/integrity
-      const profile = DatasetValidator.profile(parsedRows, f.name);
-      if (profile.shape === 'metadata') {
-        throw new Error(
-          `"${f.name}" appears to be a dataset metadata / descriptor file. ` +
-          `This file describes the dataset but contains NO actual data rows.\n\n` +
-          `Please upload the real records dataset instead.`
-        );
-      }
-      if (profile.shape === 'corrupted' || profile.shape === 'empty') {
-        throw new Error(`Failed to load dataset: File is empty or has a corrupted shape.`);
-      }
-
-      const colCount = profile.columnCount;
-
-      // Cache full raw CSV/JSON text in local IndexedDB for complete persistence on refresh
-      await localDB.saveDatasetCSV(f.name, rawText);
-
-      // Generate column metadata
-      const realColsMeta = parsedRows.length > 0
-        ? Object.keys(parsedRows[0]).map(colName => {
-            const samples = parsedRows.slice(0, 10).map(r => r[colName]).filter(v => v != null && v !== '');
-            const numCount = samples.filter(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v)))).length;
-            let colType = 'VARCHAR';
-            if (numCount > samples.length * 0.6) {
-              const firstNum = samples.find(v => typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v))));
-              colType = firstNum !== undefined && Number.isInteger(Number(firstNum)) ? 'INTEGER' : 'DECIMAL';
-            }
-            return { name: colName, type: colType, is_he: false };
-          })
-        : getSampleColumns(f.name);
-
-      const d = await registerDataset(f.name, f.name.split('.').pop() || 'csv', parsedRows.length, colCount, f.size, realColsMeta);
+      const d = await registerDataset(f.name, f.name.split('.').pop() || 'csv', totalRowCount, realColsMeta.length, f.size, realColsMeta);
       setTableOwner(f.name, d.id);
       if (!selectedDataset) setSelectedDataset(d);
       await loadDatasets(ws!.id);

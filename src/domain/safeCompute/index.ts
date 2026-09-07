@@ -8,7 +8,9 @@ import {
   resolveBinaryMapping,
   computePointBiserial,
   computeOneWayAnova,
+  anovaFromSufficientStats,
   computeCramersV,
+  cramersVFromContingency,
   hasZeroVariance
 } from './relationshipRanker';
 import { applyBenjaminiHochberg } from './corrections';

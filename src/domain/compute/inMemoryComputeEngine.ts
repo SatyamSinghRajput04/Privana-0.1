@@ -60,8 +60,10 @@ export const inMemoryComputeEngine: ComputeEngine = {
     const groups: Record<string, { sum: number; count: number }> = {};
     for (const r of rows) {
       const gVal = r[groupBy];
-      const mVal = Number(r[metric]);
-      if (gVal === null || gVal === undefined || isNaN(mVal)) continue;
+      const rawM = r[metric];
+      if (gVal === null || gVal === undefined || gVal === '' || rawM === null || rawM === undefined || rawM === '') continue;
+      const mVal = Number(rawM);
+      if (isNaN(mVal)) continue;
       const key = String(gVal);
       if (!groups[key]) groups[key] = { sum: 0, count: 0 };
       groups[key].sum += mVal;

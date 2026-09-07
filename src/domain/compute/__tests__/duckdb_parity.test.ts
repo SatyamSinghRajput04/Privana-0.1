@@ -131,7 +131,7 @@ async function runParityTests() {
     { category: 'Control', count: 3, sum: 33 },
     { category: 'TreatmentA', count: 3, sum: 63 },
     { category: 'TreatmentB', count: 3, sum: 93 }
-  ], 9, 189, 4587);
+  ], 9, 189, 4575);
 
   assert(isClose(rawAnova.fValue, sufficientAnova.fValue, 1e-4), `F-Value must match (raw=${rawAnova.fValue}, suff=${sufficientAnova.fValue})`);
   assert(isClose(rawAnova.etaSquared, sufficientAnova.etaSquared, 1e-4), `EtaSquared must match`);

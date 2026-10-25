@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/compoundQuestionPlanner.ts
 // COMPOUND QUESTION PLANNER — deterministic decomposition of broad "analyze X"
 // style questions into 2-3 sub-questions, each executed through the existing,

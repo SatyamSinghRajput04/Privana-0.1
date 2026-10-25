@@ -1,4 +1,4 @@
-import { SemanticResolver } from '../semanticResolver';
+﻿import { SemanticResolver } from '../semanticResolver';
 import { DatasetValidator } from '../../validator/validator';
 
 let passed = 0;

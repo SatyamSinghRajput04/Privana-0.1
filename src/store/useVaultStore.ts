@@ -1,4 +1,4 @@
-import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
+﻿import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import { dropTable } from '../lib/sqlEngine';
 import { create } from 'zustand';
 import type { Page, Workspace } from '../App';

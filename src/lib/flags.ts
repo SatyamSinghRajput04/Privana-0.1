@@ -1,4 +1,4 @@
-export const FLAGS = {
+﻿export const FLAGS = {
   USE_NEW_ANALYTICS_PIPELINE: true,
   USE_NEW_ANALYTICS_VISUALS:  true,
   USE_LLM_PLAN_PROPOSER:      false,

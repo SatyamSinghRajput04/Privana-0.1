@@ -1,4 +1,4 @@
-import { DistributionExecutor } from '../executors/distribution';
+﻿import { DistributionExecutor } from '../executors/distribution';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

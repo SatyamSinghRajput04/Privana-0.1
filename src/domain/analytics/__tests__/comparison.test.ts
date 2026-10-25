@@ -1,4 +1,4 @@
-import { ComparisonExecutor } from '../executors/comparison';
+﻿import { ComparisonExecutor } from '../executors/comparison';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

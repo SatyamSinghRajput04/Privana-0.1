@@ -1,4 +1,4 @@
-/* eslint-disable no-loss-of-precision */
+﻿/* eslint-disable no-loss-of-precision */
 
 // Lanczos approximation for log-gamma (accurate to 15 significant figures)
 function _lgamma(z: number): number {

@@ -1,4 +1,4 @@
-import { CorrelationExecutor } from '../executors/correlation';
+﻿import { CorrelationExecutor } from '../executors/correlation';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

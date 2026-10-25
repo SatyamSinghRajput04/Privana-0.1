@@ -1,4 +1,4 @@
-export interface ColumnProfile {
+﻿export interface ColumnProfile {
     name: string;
     type: 'string' | 'number' | 'boolean' | 'date';
     semanticType: string;

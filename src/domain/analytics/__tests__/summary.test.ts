@@ -1,4 +1,4 @@
-import { SummaryExecutor } from '../executors/summary';
+﻿import { SummaryExecutor } from '../executors/summary';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

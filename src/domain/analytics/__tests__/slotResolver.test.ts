@@ -1,4 +1,4 @@
-import { SlotResolver } from '../slotResolver';
+﻿import { SlotResolver } from '../slotResolver';
 import { DatasetValidator } from '../../validator/validator';
 
 let passed = 0;

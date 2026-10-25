@@ -1,4 +1,4 @@
-import { PrivacyFirewall } from './firewall';
+﻿import { PrivacyFirewall } from './firewall';
 import { useVaultStore } from '../../store/useVaultStore';
 
 export interface RouteInfo {

@@ -1,4 +1,4 @@
-import alasql from 'alasql';
+﻿import alasql from 'alasql';
 import { DatasetValidator } from '../validator/validator';
 import { ColumnResolver } from '../resolver/resolver';
 import { SQLGenerator } from '../sql/sqlGenerator';

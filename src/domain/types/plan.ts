@@ -1,4 +1,4 @@
-export type Intent =
+﻿export type Intent =
   | 'correlation'
   | 'regression'
   | 'distribution'

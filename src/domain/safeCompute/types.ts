@@ -1,4 +1,4 @@
-export type FeatureImportanceRow = {
+﻿export type FeatureImportanceRow = {
   rank: number;
   feature: string;
   method: 'Pearson' | 'Spearman' | 'Point-Biserial' | 'ANOVA' | 'Cramer\'s V' | 'Chi-Square';

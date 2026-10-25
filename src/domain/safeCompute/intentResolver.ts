@@ -1,4 +1,4 @@
-export type ResolvedQATarget = {
+﻿export type ResolvedQATarget = {
   intent: 'correlation' | 'regression' | 'distribution' | 'feature_importance' | 'unsupported';
   target: string | null;
 };

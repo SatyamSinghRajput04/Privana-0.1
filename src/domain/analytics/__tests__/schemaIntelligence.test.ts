@@ -1,4 +1,4 @@
-import { SchemaIntelligence } from '../schemaIntelligence';
+﻿import { SchemaIntelligence } from '../schemaIntelligence';
 import { DatasetValidator } from '../../validator/validator';
 
 let passed = 0;

@@ -1,4 +1,4 @@
-import { QueryPlan } from '../types/plan';
+﻿import { QueryPlan } from '../types/plan';
 
 export type VerificationOutcome = {
   success: boolean;

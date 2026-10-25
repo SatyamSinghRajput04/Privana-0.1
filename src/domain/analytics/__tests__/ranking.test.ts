@@ -1,4 +1,4 @@
-import { RankingExecutor } from '../executors/ranking';
+﻿import { RankingExecutor } from '../executors/ranking';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

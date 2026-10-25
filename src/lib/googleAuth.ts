@@ -18,6 +18,18 @@ export function signInWithGoogle() {
   window.open(url, 'google-auth', isMobile() ? '' : 'width=500,height=600');
 
   const handler = async (event: MessageEvent) => {
+    // Validate event origin to prevent untrusted window postMessage spoofing
+    const allowedOrigins = [window.location.origin];
+    const proxyUri = import.meta.env.VITE_GOOGLE_AUTH_PROXY;
+    if (proxyUri) {
+      try {
+        allowedOrigins.push(new URL(proxyUri).origin);
+      } catch {}
+    }
+    if (!allowedOrigins.includes(event.origin)) {
+      return;
+    }
+
     if (event.data?.type === 'google-auth-denied') { window.removeEventListener('message', handler); return; }
     if (event.data?.type !== 'google-auth-success') return;
     window.removeEventListener('message', handler);

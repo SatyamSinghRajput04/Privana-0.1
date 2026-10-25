@@ -66,11 +66,20 @@ export const RankingExecutor = {
         
         validCount++;
 
+        // Project only key identifiers and target metric (Safeguard: avoid wide schema memory bloat)
+        const labelKey = Object.keys(r).find(k => k.toLowerCase() === 'name' || k.toLowerCase() === 'title' || k.toLowerCase() === 'label') || 'id';
+        const projectedItem: Record<string, any> = {
+          id: r.id,
+          [metric]: numV,
+          metric_value: numV
+        };
+        if (r[labelKey] !== undefined) projectedItem[labelKey] = r[labelKey];
+
         if (topN.length < limit) {
-          topN.push({ ...r, metric_value: numV });
+          topN.push(projectedItem);
           topN.sort((a, b) => b.metric_value - a.metric_value);
         } else if (numV > topN[topN.length - 1].metric_value) {
-          topN[topN.length - 1] = { ...r, metric_value: numV };
+          topN[topN.length - 1] = projectedItem;
           topN.sort((a, b) => b.metric_value - a.metric_value);
         }
       }

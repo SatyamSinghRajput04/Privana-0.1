@@ -28,6 +28,21 @@ export interface GroupedAggregateRow {
   count: number;
 }
 
+export interface DistributionBin {
+  binRange: string;
+  binLabel: string;
+  count: number;
+  minVal?: number;
+  maxVal?: number;
+  category_label?: string;
+}
+
+export interface DistributionResult {
+  isNumeric: boolean;
+  rows: DistributionBin[];
+  totalCount: number;
+}
+
 /**
  * Declarative 0/1 encoding for a categorical column in a moments() request.
  *
@@ -176,4 +191,10 @@ export interface ComputeEngine {
    * sample, so visual limits never degrade statistical correctness.
    */
   samplePoints(rows: any[], request: MomentsRequest, limit: number): { x: number; y: number }[];
+
+  /**
+   * Computes histogram bins for numeric columns (via Sturges' rule) or
+   * frequency distribution for categorical columns.
+   */
+  distribution(rows: any[], column: string): DistributionResult;
 }

@@ -1,4 +1,4 @@
-import alasql from 'alasql';
+﻿import alasql from 'alasql';
 import Papa from 'papaparse';
 import { registerVfsFile, registerMemoryTable, getDuckDBConnection } from '../domain/compute/duckdb/duckdbWorker';
 

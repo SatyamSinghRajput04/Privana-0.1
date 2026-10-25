@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/executors/groupedAverage.ts
 // S8c GROUPED AVERAGE EXECUTOR — Computes metric averages grouped by a category.
 //

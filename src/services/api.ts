@@ -1,4 +1,4 @@
-import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
+﻿import { privacyFetch } from '../infrastructure/firewall/privacyFetch';
 import type { Workspace } from '../App';
 
 export const api = {

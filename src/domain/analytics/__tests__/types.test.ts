@@ -1,4 +1,4 @@
-import { AnalyticsResult, SUPPORTED_INTENTS } from '../types';
+﻿import { AnalyticsResult, SUPPORTED_INTENTS } from '../types';
 
 let passed = 0;
 let failed = 0;

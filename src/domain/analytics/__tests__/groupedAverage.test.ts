@@ -1,4 +1,4 @@
-import { GroupedAverageExecutor } from '../executors/groupedAverage';
+﻿import { GroupedAverageExecutor } from '../executors/groupedAverage';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

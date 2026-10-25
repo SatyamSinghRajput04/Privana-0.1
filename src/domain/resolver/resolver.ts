@@ -1,4 +1,4 @@
-import { DatasetProfile } from '../types/dataset';
+﻿import { DatasetProfile } from '../types/dataset';
 
 export type ColumnMapping = {
   term: string;

@@ -1,4 +1,4 @@
-import { FilterExecutor } from '../executors/filter';
+﻿import { FilterExecutor } from '../executors/filter';
 import { AnalysisPlan } from '../types';
 
 let passed = 0;

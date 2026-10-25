@@ -1,4 +1,4 @@
-import { localDB, type AuditLog } from '../../lib/indexedDb';
+﻿import { localDB, type AuditLog } from '../../lib/indexedDb';
 
 // Session-level salt generated once when the app load to protect hashes from rainbow-table attacks
 const sessionSalt = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);

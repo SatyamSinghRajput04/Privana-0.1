@@ -1,4 +1,4 @@
-import { QueryPlan, Filter } from '../types/plan';
+﻿import { QueryPlan, Filter } from '../types/plan';
 
 export type ParameterizedSQL = {
   sql: string;

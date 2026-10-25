@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/executors/correlation.ts
 // S8d CORRELATION EXECUTOR — Pure function for statistical correlation.
 //

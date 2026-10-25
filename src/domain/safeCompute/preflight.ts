@@ -1,4 +1,4 @@
-export type BlockReason = {
+﻿export type BlockReason = {
   reason: string;
   nextSteps: string[];
   bypassAllowed?: boolean;

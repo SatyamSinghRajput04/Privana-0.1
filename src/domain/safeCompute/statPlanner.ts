@@ -1,4 +1,4 @@
-export type ColumnProfile = {
+﻿export type ColumnProfile = {
   name: string;
   type: 'numeric' | 'binary_categorical' | 'multi_categorical' | 'date' | 'unsupported';
   uniqueValues: any[];

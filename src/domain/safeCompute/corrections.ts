@@ -1,4 +1,4 @@
-export function applyBonferroni(rawPValues: (number | null)[]): (number | null)[] {
+﻿export function applyBonferroni(rawPValues: (number | null)[]): (number | null)[] {
   const m = rawPValues.filter(p => p !== null).length;
   return rawPValues.map(p => {
     if (p === null) return null;

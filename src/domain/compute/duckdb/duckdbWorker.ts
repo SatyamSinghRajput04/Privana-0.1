@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/compute/duckdb/duckdbWorker.ts
 // Privana DuckDB-WASM Worker Manager
 // Encapsulates DuckDB WebAssembly lifecycle, VFS file registration, and query execution.

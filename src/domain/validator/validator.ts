@@ -1,4 +1,4 @@
-import { DatasetProfile, ColumnProfile, QualityMetrics, PiiFlag } from '../types/dataset';
+﻿import { DatasetProfile, ColumnProfile, QualityMetrics, PiiFlag } from '../types/dataset';
 
 /**
  * Generate a simple hash from string content for cache keys

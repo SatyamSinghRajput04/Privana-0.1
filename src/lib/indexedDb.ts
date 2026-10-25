@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Privana local-first IndexedDB Database Utility
  * Handles binary and large text caching (e.g., raw CSV files) in-browser.
  * Prevents the 5MB browser localStorage overflow error.

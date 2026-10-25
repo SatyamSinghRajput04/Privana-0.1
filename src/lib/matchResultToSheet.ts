@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // src/lib/matchResultToSheet.ts
 // LEVEL 2 FEATURE — Maps a Q&A result to the most contextually relevant static
 // workspace sheet so the contextual card is injected in the right place.

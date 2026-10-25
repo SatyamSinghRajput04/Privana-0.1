@@ -1,4 +1,4 @@
-export const teenMentalHealthColumns = [
+﻿export const teenMentalHealthColumns = [
   { name: 'age', type: 'INTEGER', is_he: false },
   { name: 'gender', type: 'VARCHAR', is_he: false },
   { name: 'sleep_hours', type: 'DECIMAL', is_he: false },

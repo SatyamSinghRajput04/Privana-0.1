@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Privana Schema Firewall Middleware
  * Obfuscates column schemas and queries before they leave the device to prevent PII/metadata leakage to cloud LLMs,
  * and reconstructs the generated SQL back to its original column schemas locally.

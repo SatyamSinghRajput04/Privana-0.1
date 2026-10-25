@@ -34,7 +34,9 @@ import {
   PairProfile,
   PairMoments,
   MomentsRequest,
-  BinaryEncoding
+  BinaryEncoding,
+  DistributionBin,
+  DistributionResult
 } from './ComputeEngine';
 
 /** Shared data-validity rule: a pair row counts only if BOTH sides are present. */
@@ -209,5 +211,120 @@ export const inMemoryComputeEngine: ComputeEngine = {
     }
 
     return reservoir;
+  },
+
+  distribution(rows: any[], column: string): DistributionResult {
+    if (!rows || rows.length === 0 || !column) {
+      return { isNumeric: false, rows: [], totalCount: 0 };
+    }
+
+    const numericVals: number[] = [];
+    const categoricalCounts: Record<string, number> = {};
+    let presentCount = 0;
+    let hasNonInteger = false;
+    let min = Infinity;
+    let max = -Infinity;
+
+    for (let i = 0; i < rows.length; i++) {
+      const v = rows[i][column];
+      if (v === null || v === undefined || v === '') continue;
+      presentCount++;
+
+      const numV = Number(v);
+      if (!isNaN(numV) && typeof v !== 'boolean') {
+        numericVals.push(numV);
+        if (numV < min) min = numV;
+        if (numV > max) max = numV;
+        if (!Number.isInteger(numV)) hasNonInteger = true;
+      } else {
+        const s = String(v);
+        categoricalCounts[s] = (categoricalCounts[s] || 0) + 1;
+      }
+    }
+
+    if (presentCount === 0) {
+      return { isNumeric: false, rows: [], totalCount: 0 };
+    }
+
+    let uniqueNumericSize = 0;
+    if (hasNonInteger) {
+      uniqueNumericSize = 11;
+    } else {
+      const tempSet = new Set<number>();
+      for (let i = 0; i < numericVals.length; i++) {
+        tempSet.add(numericVals[i]);
+        if (tempSet.size > 10) {
+          uniqueNumericSize = 11;
+          break;
+        }
+      }
+      uniqueNumericSize = tempSet.size;
+    }
+
+    const isNumeric = numericVals.length > 0 &&
+                      (numericVals.length / presentCount) > 0.8 &&
+                      (uniqueNumericSize > 10 || hasNonInteger);
+
+    const distributionRows: DistributionBin[] = [];
+
+    if (isNumeric) {
+      const range = max - min;
+      if (range === 0) {
+        distributionRows.push({
+          binRange: `${min}`,
+          binLabel: `${min}`,
+          count: numericVals.length,
+          minVal: min,
+          maxVal: max,
+        });
+      } else {
+        const binCount = Math.ceil(Math.log2(numericVals.length) + 1);
+        const binWidth = range / binCount;
+        const counts = new Array(binCount).fill(0);
+
+        for (let i = 0; i < numericVals.length; i++) {
+          const v = numericVals[i];
+          let binIndex = Math.floor((v - min) / binWidth);
+          if (binIndex >= binCount) binIndex = binCount - 1;
+          if (binIndex < 0) binIndex = 0;
+          counts[binIndex]++;
+        }
+
+        for (let i = 0; i < binCount; i++) {
+          const start = min + i * binWidth;
+          const end = (i === binCount - 1) ? max : start + binWidth;
+          const label = `${start.toFixed(1)} - ${end.toFixed(1)}`;
+          distributionRows.push({
+            binRange: label,
+            binLabel: label,
+            count: counts[i],
+            minVal: start,
+            maxVal: end,
+          });
+        }
+      }
+    } else {
+      // Add numeric values as strings if non-numeric classification
+      for (let i = 0; i < numericVals.length; i++) {
+        const s = String(numericVals[i]);
+        categoricalCounts[s] = (categoricalCounts[s] || 0) + 1;
+      }
+
+      for (const [key, count] of Object.entries(categoricalCounts)) {
+        distributionRows.push({
+          binRange: key,
+          binLabel: key,
+          category_label: key,
+          count,
+        });
+      }
+      distributionRows.sort((a, b) => b.count - a.count);
+    }
+
+    return {
+      isNumeric,
+      rows: distributionRows,
+      totalCount: presentCount
+    };
   }
 };

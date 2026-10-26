@@ -1,4 +1,4 @@
-﻿import alasql from 'alasql';
+import alasql from 'alasql';
 import Papa from 'papaparse';
 import { registerVfsFile, registerMemoryTable, getDuckDBConnection } from '../domain/compute/duckdb/duckdbWorker';
 
@@ -736,8 +736,9 @@ export function executeSQL(sql: string, params?: any[]): any[] {
 // ─────────────────────────────────────────────────────────────────────────────
 export interface FilterClause {
   column: string;
-  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'in' | 'between';
+  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'in' | 'between' | 'is_null';
   value: any;
+  includeNull?: boolean;
   isSuspended?: boolean;
 }
 
@@ -761,30 +762,31 @@ export function compileFiltersToSQL(tableName: string, filters: FilterClause[]):
     }
 
     const col = '`' + f.column + '`';
+    let clauseStr = '';
 
     switch (f.operator) {
       case 'eq':
-        clauses.push(`${col} = ?`);
+        clauseStr = `${col} = ?`;
         params.push(f.value);
         break;
       case 'neq':
-        clauses.push(`${col} != ?`);
+        clauseStr = `${col} != ?`;
         params.push(f.value);
         break;
       case 'gt':
-        clauses.push(`${col} > ?`);
+        clauseStr = `${col} > ?`;
         params.push(f.value);
         break;
       case 'lt':
-        clauses.push(`${col} < ?`);
+        clauseStr = `${col} < ?`;
         params.push(f.value);
         break;
       case 'gte':
-        clauses.push(`${col} >= ?`);
+        clauseStr = `${col} >= ?`;
         params.push(f.value);
         break;
       case 'lte':
-        clauses.push(`${col} <= ?`);
+        clauseStr = `${col} <= ?`;
         params.push(f.value);
         break;
       case 'in':
@@ -792,16 +794,27 @@ export function compileFiltersToSQL(tableName: string, filters: FilterClause[]):
           // Cap lists to 50 items to avoid stack overflows §6
           const truncated = f.value.slice(0, 50);
           const placeholders = truncated.map(() => '?').join(', ');
-          clauses.push(`${col} IN (${placeholders})`);
+          clauseStr = `${col} IN (${placeholders})`;
           params.push(...truncated);
         }
         break;
       case 'between':
         if (Array.isArray(f.value) && f.value.length === 2) {
-          clauses.push(`${col} BETWEEN ? AND ?`);
+          clauseStr = `${col} BETWEEN ? AND ?`;
           params.push(f.value[0], f.value[1]);
         }
         break;
+      case 'is_null':
+        clauseStr = `${col} IS NULL`;
+        break;
+    }
+
+    if (clauseStr) {
+      if (f.includeNull) {
+        clauses.push(`(${clauseStr} OR ${col} IS NULL)`);
+      } else {
+        clauses.push(clauseStr);
+      }
     }
   }
 

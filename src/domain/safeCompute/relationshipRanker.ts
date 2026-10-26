@@ -1,7 +1,7 @@
-﻿/* eslint-disable no-loss-of-precision */
+/* eslint-disable no-loss-of-precision */
 
 // Lanczos approximation for log-gamma (accurate to 15 significant figures)
-function _lgamma(z: number): number {
+export function _lgamma(z: number): number {
   const c = [
     76.18009172947146, -86.50532032941677, 24.01409824083091,
     -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5
@@ -19,7 +19,7 @@ function _lgamma(z: number): number {
 }
 
 // Incomplete beta function via modified Lentz continued fraction method
-function _betaIncomplete(a: number, b: number, x: number): number {
+export function _betaIncomplete(a: number, b: number, x: number): number {
   if (x <= 0) return 0;
   if (x >= 1) return 1;
 
@@ -60,6 +60,35 @@ export function tDistPValue(t: number, df: number): number {
   if (df <= 0) return 1.0;
   const x = df / (df + t * t);
   return _betaIncomplete(df / 2, 0.5, x);
+}
+
+/**
+ * Approximate t critical value for two-tailed 95% CI (df >= 1).
+ * Uses a rational approximation accurate to ±0.001 for df >= 2.
+ * For large df, converges to z=1.96 (Normal).
+ */
+export function tCritical95(df: number): number {
+  if (df <= 0) return 1.96;
+  // Small-sample exact values
+  const exact: Record<number, number> = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+    6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+    15: 2.131, 20: 2.086, 25: 2.060, 30: 2.042, 40: 2.021,
+    60: 2.000, 120: 1.980
+  };
+  if (exact[df] !== undefined) return exact[df];
+  // For large df, converges to z=1.96
+  if (df > 120) return 1.96;
+  // Linear interpolation between bracketing points
+  const keys = Object.keys(exact).map(Number).sort((a, b) => a - b);
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (df > keys[i] && df < keys[i + 1]) {
+      const t0 = exact[keys[i]], t1 = exact[keys[i + 1]];
+      const frac = (df - keys[i]) / (keys[i + 1] - keys[i]);
+      return t0 + frac * (t1 - t0);
+    }
+  }
+  return 1.96;
 }
 
 // F-distribution significance helper for ANOVA
@@ -192,13 +221,18 @@ export function getSpearmanCorrelation(xs: number[], ys: number[]): number {
 }
 
 // Test significance of a correlation coefficient
-export function testCorrelationSignificance(r: number, n: number) {
-  if (n <= 2) return { t: 0, p: 1.0 };
-  const clampedR = Math.max(-0.999999, Math.min(0.999999, r));
+export function testCorrelationSignificance(r: number, n: number): {
+  t: number;
+  p: number;
+  significant: boolean;
+  df: number;
+} {
+  if (n <= 2) return { t: 0, p: 1.0, significant: false, df: Math.max(0, n - 2) };
+  const clampedR = Math.max(-0.9999999, Math.min(0.9999999, r));
   const df = n - 2;
   const t = clampedR * Math.sqrt(df / (1 - clampedR * clampedR));
   const p = tDistPValue(Math.abs(t), df);
-  return { t, p };
+  return { t, p, significant: p < 0.05, df };
 }
 
 // Deterministic binary positive outcome category resolver
@@ -523,4 +557,104 @@ export function computeCramersV(
   const pValue = chiSquarePValue(chiSq, df);
 
   return { chiSq, cramersV, pValue, warnings };
+}
+
+export interface LinearRegressionResult {
+  slope: number;
+  intercept: number;
+  r2: number;
+  seReg: number;
+  seSlope: number;
+  seIntercept: number;
+  tSlope: number;
+  tIntercept: number;
+  pSlope: number;
+  pIntercept: number;
+  Sxx: number;
+  df: number;
+}
+
+/**
+ * OLS simple linear regression. Returns slope, intercept, R², RSE,
+ * AND the computed standard errors / t-stats / p-values for each coefficient.
+ */
+export function getLinearRegression(xs: number[], ys: number[]): LinearRegressionResult {
+  const n = xs.length;
+  if (n < 3) return {
+    slope: 0, intercept: 0, r2: 0, seReg: 0,
+    seSlope: 0, seIntercept: 0,
+    tSlope: 0, tIntercept: 0,
+    pSlope: 1, pIntercept: 1,
+    Sxx: 0, df: Math.max(0, n - 2)
+  };
+  const meanX = xs.reduce((s, v) => s + v, 0) / n;
+  const meanY = ys.reduce((s, v) => s + v, 0) / n;
+  let Sxy = 0, Sxx = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - meanX;
+    Sxy += dx * (ys[i] - meanY);
+    Sxx += dx * dx;
+  }
+  const slope = Sxx === 0 ? 0 : Sxy / Sxx;
+  const intercept = meanY - slope * meanX;
+
+  let totalSS = 0, residualSS = 0;
+  let sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    const res = ys[i] - (slope * xs[i] + intercept);
+    residualSS += res * res;
+    totalSS += Math.pow(ys[i] - meanY, 2);
+    sumX2 += xs[i] * xs[i];
+  }
+  const df = n - 2;
+  const r2 = totalSS === 0 ? 0 : 1 - residualSS / totalSS;
+  const seReg = df > 0 ? Math.sqrt(residualSS / df) : 0;
+
+  // Correct OLS standard errors from first principles
+  const seSlope = Sxx === 0 ? 0 : seReg / Math.sqrt(Sxx);
+  const seIntercept = Sxx === 0 ? 0 : seReg * Math.sqrt(sumX2 / (n * Sxx));
+  const tSlope = seSlope === 0 ? 0 : slope / seSlope;
+  const tIntercept = seIntercept === 0 ? 0 : intercept / seIntercept;
+  const pSlope = tDistPValue(Math.abs(tSlope), df);
+  const pIntercept = tDistPValue(Math.abs(tIntercept), df);
+
+  return { slope, intercept, r2, seReg, seSlope, seIntercept, tSlope, tIntercept, pSlope, pIntercept, Sxx, df };
+}
+
+/**
+ * Fisher's adjusted skewness (G1) and excess kurtosis (G2) — same as SPSS/Excel.
+ */
+export function getSkewnessAndKurtosis(vals: number[]): { skewness: number; kurtosis: number } {
+  const n = vals.length;
+  if (n < 4) return { skewness: 0, kurtosis: 0 };
+  const m = vals.reduce((s, v) => s + v, 0) / n;
+  const m2 = vals.reduce((s, v) => s + Math.pow(v - m, 2), 0) / n;
+  const m3 = vals.reduce((s, v) => s + Math.pow(v - m, 3), 0) / n;
+  const m4 = vals.reduce((s, v) => s + Math.pow(v - m, 4), 0) / n;
+  if (m2 === 0) return { skewness: 0, kurtosis: 0 };
+  const skew = m3 / Math.pow(m2, 1.5);
+  const excessKurt = m4 / Math.pow(m2, 2) - 3;
+  // Fisher's bias corrections (same as R's e1071::skewness type 2 / Excel SKEW)
+  const adjSkew = (Math.sqrt(n * (n - 1)) / (n - 2)) * skew;
+  const adjKurt = ((n - 1) / ((n - 2) * (n - 3))) * ((n + 1) * excessKurt + 6);
+  return {
+    skewness: parseFloat(adjSkew.toFixed(6)),
+    kurtosis: parseFloat(adjKurt.toFixed(6))
+  };
+}
+
+/** Interpret a Pearson/Spearman r value with direction and magnitude label. */
+export function interpretCorrelation(r: number): string {
+  const abs = Math.abs(r);
+  const dir = r > 0 ? 'positive' : r < 0 ? 'negative' : 'zero';
+  const strength = abs >= 0.9 ? 'very strong' : abs >= 0.7 ? 'strong'
+    : abs >= 0.4 ? 'moderate' : abs >= 0.2 ? 'weak' : 'negligible';
+  return `${strength} ${dir}`;
+}
+
+/** Format p-value for display — avoids floating point noise. */
+export function fmtP(p: number): string {
+  if (p < 1e-15) return '< 1e-15';
+  if (p < 0.0001) return p.toExponential(3);
+  return p.toFixed(4);
 }

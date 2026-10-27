@@ -146,7 +146,12 @@ export const localDB = {
       const request = store.get(name);
       request.onsuccess = () => {
         const res = request.result as CachedDataset | undefined;
-        resolve(res || null);
+        if (res) return resolve(res);
+        // Fallback: Check alternative name formatting (e.g. stripped extension or sanitized)
+        const altName = name.includes('.') ? name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_') : `${name}.csv`;
+        const altReq = store.get(altName);
+        altReq.onsuccess = () => resolve((altReq.result as CachedDataset) || null);
+        altReq.onerror = () => resolve(null);
       };
       request.onerror = () => resolve(null);
     });

@@ -69,6 +69,32 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
   const [filterHistory, setFilterHistory] = useState<Record<string, FilterClause>[]>([]);
   const [filterHistoryIndex, setFilterHistoryIndex] = useState(-1);
   const isNavigatingRef = useRef(false);
+  const reuploadInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDirectReupload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedDataset) return;
+    try {
+      setLoadingTable(selectedDataset.name);
+      await localDB.saveDatasetBlob(selectedDataset.name, file, selectedDataset.id);
+      const res = await ensureTableHydrated(selectedDataset);
+      if (res.ok) {
+        showToast(`"${selectedDataset.name}" re-hydrated with ${res.rowCount.toLocaleString()} rows!`);
+        if (qaInput) {
+          runAnalyticsQuestionAsync(qaInput);
+        } else {
+          setQaResponse(null);
+        }
+      } else {
+        showToast(`Failed to hydrate: ${res.details || res.error}`);
+      }
+    } catch (err: any) {
+      showToast(`Upload error: ${err.message || err}`);
+    } finally {
+      setLoadingTable(null);
+      if (e.target) e.target.value = '';
+    }
+  };
 
   // Copilot Drawer State
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -110,14 +136,27 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
     }
   }, [selectedDataset?.name]);
 
-  // Auto-load raw dataset into local database if needed
-  const ensureTableLoaded = async (ds: any): Promise<boolean> => {
-    if (!ds || !ds.name) return false;
+  // Auto-load raw dataset into DuckDB-WASM engine with deterministic handshake & fallback
+  const ensureTableLoaded = async (ds: any): Promise<HydrationResult> => {
+    if (!ds || !ds.name) {
+      return { ok: false, state: 'failed', error: 'FILE_NOT_FOUND_IN_STORAGE', details: 'No dataset selected' };
+    }
     const tableName = ds.name;
-    if (isTableLoaded(tableName) && getTableOwner(tableName) === ds.id) return true;
+    setLoadingTable(tableName);
 
     try {
-      setLoadingTable(tableName);
+      // 1. Primary path: Deterministic full-dataset DuckDB-WASM hydration
+      const hydration = await ensureTableHydrated(ds);
+      if (hydration.ok) {
+        return hydration;
+      }
+
+      // If stale preview detected, reject immediately (Fail-Closed guarantee)
+      if (hydration.error === 'STALE_PREVIEW_DETECTED') {
+        return hydration;
+      }
+
+      // 2. Secondary fallback for JSON or non-DuckDB small in-memory files
       let text = await localDB.getDatasetCSV(tableName);
       if (!text) {
         text = await localDB.getDatasetCSV(getSqlTableName(tableName));
@@ -128,25 +167,40 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
         } else {
           await loadCSV(tableName, text);
         }
-        setTableOwner(tableName, ds.id);
-        return isTableLoaded(tableName);
+        setTableOwner(tableName, String(ds.id));
+        return {
+          ok: true,
+          datasetId: String(ds.id),
+          tableName: getSqlTableName(tableName),
+          rowCount: getTableRowCount(tableName),
+          state: 'ready'
+        };
       }
-    } catch (err) {
-      console.error('Error auto-loading dataset into local engine:', err);
+
+      return hydration;
+    } catch (err: any) {
+      console.error('Error during dataset hydration:', err);
+      return {
+        ok: false,
+        state: 'failed',
+        error: 'TABLE_RESTORATION_FAILED',
+        details: err?.message || String(err)
+      };
     } finally {
       setLoadingTable(null);
     }
-    return isTableLoaded(tableName);
   };
 
   // Pre-load table and blueprint when selected dataset changes
   useEffect(() => {
     if (page !== 'analyze' || !selectedDataset) return;
-    ensureTableLoaded(selectedDataset).then(loaded => {
-      if (loaded && workspacePipelineEnabled && (!activeWorkspace || activeWorkspace.datasetId !== selectedDataset.name)) {
+    ensureTableLoaded(selectedDataset).then(res => {
+      if (res.ok && workspacePipelineEnabled && (!activeWorkspace || activeWorkspace.datasetId !== selectedDataset.name)) {
         const schema = selectedDataset.columns_meta || [];
         const blueprint = planWorkspace(selectedDataset.name, schema);
         setWorkspaceBlueprint(blueprint);
+      } else if (!res.ok && res.error === 'STALE_PREVIEW_DETECTED') {
+        showToast(`"${selectedDataset.name}" has legacy preview. Re-upload for full analytics.`);
       }
     });
   }, [selectedDataset?.name, page, workspacePipelineEnabled]);
@@ -172,9 +226,13 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
       setTimeout(() => { if (epoch === executionEpochRef.current) setLoadingStage(2); }, 450);
       setTimeout(() => { if (epoch === executionEpochRef.current) setLoadingStage(3); }, 650);
 
-      const isLoaded = await ensureTableLoaded(selectedDataset);
-      if (!isLoaded) {
-        throw new Error(`Raw data for "${selectedDataset.name}" is missing from local storage.`);
+      const hydration = await ensureTableLoaded(selectedDataset);
+      if (!hydration.ok) {
+        if (hydration.error === 'STALE_PREVIEW_DETECTED') {
+          setQaResponse(`⚠️ Legacy Preview Detected\n\n"${selectedDataset.name}" was stored as an older 10-row preview in your browser.\n\nPlease go to the Datasets tab and re-upload "${selectedDataset.name}" to enable 100% full-population DuckDB analytics.`);
+          return;
+        }
+        throw new Error(hydration.details || `Raw data for "${selectedDataset.name}" could not be loaded.`);
       }
 
       const tableName = selectedDataset.name;
@@ -626,7 +684,15 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
             bypassedDatasets={bypassedDatasets}
             localAiKillSwitchActive={localAiKillSwitchActive}
             onToggleKillSwitch={() => setLocalAiKillSwitchActive(prev => { const n = !prev; setLocalAiKillSwitch(n); return n; })}
+            onReupload={() => reuploadInputRef.current?.click()}
             canvasStyle={canvasStyle}
+          />
+          <input
+            type="file"
+            ref={reuploadInputRef}
+            onChange={handleDirectReupload}
+            accept=".csv,.parquet,.json"
+            style={{ display: 'none' }}
           />
 
           {/* DOCKED FOOTER: Workspace Tabs */}

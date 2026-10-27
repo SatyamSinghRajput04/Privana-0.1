@@ -21,6 +21,7 @@ export interface AnalyticsCanvasProps {
   bypassedDatasets?: Record<string, boolean>;
   localAiKillSwitchActive: boolean;
   onToggleKillSwitch: () => void;
+  onReupload?: () => void;
   canvasStyle?: React.CSSProperties;
 }
 
@@ -36,6 +37,7 @@ export default function AnalyticsCanvas({
   onBypassDataset,
   localAiKillSwitchActive,
   onToggleKillSwitch,
+  onReupload,
   canvasStyle
 }: AnalyticsCanvasProps) {
   const resultContainerRef = useRef<HTMLDivElement>(null);
@@ -114,9 +116,30 @@ export default function AnalyticsCanvas({
           maxWidth: '560px'
         }}>
           <HelpCircle size={28} style={{ color: '#ef4444' }} />
-          <p style={{ fontSize: '0.82rem', color: '#f4f4f5', margin: 0 }}>
+          <p style={{ fontSize: '0.82rem', color: '#f4f4f5', margin: 0, whiteSpace: 'pre-line', lineHeight: 1.6 }}>
             {qaResponse}
           </p>
+          {qaResponse.includes('Legacy Preview') && onReupload && (
+            <button
+              onClick={onReupload}
+              style={{
+                marginTop: '0.5rem',
+                padding: '0.45rem 1rem',
+                borderRadius: '8px',
+                background: '#ef4444',
+                color: '#fff',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              Select Full CSV File to Re-Upload
+            </button>
+          )}
         </div>
       ) : activeWorkspace && selectedDataset ? (
         /* 2. Workspace View */

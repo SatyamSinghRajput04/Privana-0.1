@@ -1,3 +1,4 @@
+import { localDB } from './indexedDb';
 import alasql from 'alasql';
 import Papa from 'papaparse';
 import { registerVfsFile, registerMemoryTable, getDuckDBConnection } from '../domain/compute/duckdb/duckdbWorker';
@@ -34,6 +35,180 @@ export async function registerDuckDBFile(tableName: string, file: File): Promise
 /**
  * Attaches a bounded sample and schema profile for a DuckDB table.
  */
+
+export type HydrationResult =
+  | {
+      ok: true;
+      datasetId: string;
+      tableName: string;
+      rowCount: number;
+      state: 'ready';
+    }
+  | {
+      ok: false;
+      state: 'failed';
+      error:
+        | 'FILE_NOT_FOUND_IN_STORAGE'
+        | 'TABLE_RESTORATION_FAILED'
+        | 'ROW_COUNT_MISMATCH'
+        | 'STALE_PREVIEW_DETECTED'
+        | 'TABLE_EMPTY_AFTER_HYDRATION';
+      details?: string;
+    };
+
+let currentWorkerEpoch = 0;
+const IN_FLIGHT_HYDRATIONS = new Map<string, Promise<HydrationResult>>();
+
+export function invalidateWorkerEpoch(): void {
+  currentWorkerEpoch++;
+  IN_FLIGHT_HYDRATIONS.clear();
+  DUCKDB_TABLES.clear();
+  DUCKDB_ROW_COUNTS.clear();
+}
+
+/**
+ * Deterministic 6-step Web Worker hydration handshake with in-flight mutex lock.
+ * Guarantees DuckDB table is fully restored and row-count verified before queries run.
+ */
+export async function ensureTableHydrated(
+  dataset: { id: string | number; name: string; row_count?: number; columns_meta?: any[] }
+): Promise<HydrationResult> {
+  if (!dataset || !dataset.name) {
+    return {
+      ok: false,
+      state: 'failed',
+      error: 'FILE_NOT_FOUND_IN_STORAGE',
+      details: 'No dataset specified for hydration.'
+    };
+  }
+
+  const datasetId = String(dataset.id || dataset.name);
+  const tbl = getSqlTableName(dataset.name);
+  const epoch = currentWorkerEpoch;
+  const lockKey = `${epoch}:${datasetId}`;
+
+  if (IN_FLIGHT_HYDRATIONS.has(lockKey)) {
+    return IN_FLIGHT_HYDRATIONS.get(lockKey)!;
+  }
+
+  const hydrationPromise = (async (): Promise<HydrationResult> => {
+    // 1. Verify if table is already live and queryable in DuckDB
+    if (DUCKDB_TABLES.has(tbl) && getTableOwner(dataset.name) === String(dataset.id)) {
+      try {
+        const conn = await getDuckDBConnection();
+        const res = await conn.query(`SELECT COUNT(*)::BIGINT AS total FROM "${tbl}";`);
+        const liveCount = Number(res.getChild('total')?.get(0) ?? 0);
+        const expectedCount = dataset.row_count || 0;
+        if (liveCount > 0 && (expectedCount === 0 || liveCount === expectedCount)) {
+          return { ok: true, datasetId, tableName: tbl, rowCount: liveCount, state: 'ready' };
+        }
+      } catch {
+        // Table dropped or worker restarted — proceed to rehydrate
+        DUCKDB_TABLES.delete(tbl);
+      }
+    }
+
+    // 2. Retrieve complete File / Blob from IndexedDB
+    const stored = await localDB.getDatasetFile(dataset.name, dataset.id, dataset.row_count);
+    if (!stored || !stored.file) {
+      return {
+        ok: false,
+        state: 'failed',
+        error: 'FILE_NOT_FOUND_IN_STORAGE',
+        details: `Raw file for "${dataset.name}" was not found in browser IndexedDB storage.`
+      };
+    }
+
+    // 3. Check for stale legacy preview (e.g. 10-line slice from old version)
+    if (stored.isLegacy) {
+      return {
+        ok: false,
+        state: 'failed',
+        error: 'STALE_PREVIEW_DETECTED',
+        details: `"${dataset.name}" was stored as a legacy 10-row preview. Please re-upload the full CSV file.`
+      };
+    }
+
+    // 4. Register file in DuckDB VFS and materialize queryable table
+    try {
+      await registerDuckDBFile(dataset.name, stored.file);
+    } catch (regErr: any) {
+      return {
+        ok: false,
+        state: 'failed',
+        error: 'TABLE_RESTORATION_FAILED',
+        details: regErr?.message || String(regErr)
+      };
+    }
+
+    // 5. Handshake validation: query full table and compare count against expected count
+    try {
+      const conn = await getDuckDBConnection();
+      const countRes = await conn.query(`SELECT COUNT(*)::BIGINT AS total FROM "${tbl}";`);
+      const actualCount = Number(countRes.getChild('total')?.get(0) ?? 0);
+
+      if (actualCount === 0) {
+        return {
+          ok: false,
+          state: 'failed',
+          error: 'TABLE_EMPTY_AFTER_HYDRATION',
+          details: `Table "${tbl}" contains 0 rows after hydration.`
+        };
+      }
+
+      const expected = dataset.row_count || stored.rowCount;
+      if (expected && expected > 0 && actualCount !== expected) {
+        return {
+          ok: false,
+          state: 'failed',
+          error: 'ROW_COUNT_MISMATCH',
+          details: `Hydrated row count (${actualCount}) does not match expected dataset count (${expected}).`
+        };
+      }
+
+      // 6. Cache 50-row micro-sample for UI schema intelligence & mark table ready
+      const previewRes = await conn.query(`SELECT * FROM "${tbl}" LIMIT 50;`);
+      const sampleRows: any[] = [];
+      const fields = previewRes.schema?.fields?.map((f: any) => f.name) || [];
+      for (let i = 0; i < previewRes.numRows; i++) {
+        const rowObj: Record<string, any> = {};
+        for (const field of fields) {
+          const val = previewRes.getChild(field)?.get(i);
+          rowObj[field] = typeof val === 'bigint' ? Number(val) : val;
+        }
+        sampleRows.push(rowObj);
+      }
+
+      DUCKDB_TABLES.add(tbl);
+      DUCKDB_ROW_COUNTS.set(tbl, actualCount);
+      DUCKDB_TABLE_SAMPLES.set(tbl, sampleRows);
+      setTableOwner(dataset.name, String(dataset.id));
+
+      return {
+        ok: true,
+        datasetId,
+        tableName: tbl,
+        rowCount: actualCount,
+        state: 'ready'
+      };
+    } catch (queryErr: any) {
+      return {
+        ok: false,
+        state: 'failed',
+        error: 'TABLE_RESTORATION_FAILED',
+        details: queryErr?.message || String(queryErr)
+      };
+    }
+  })();
+
+  IN_FLIGHT_HYDRATIONS.set(lockKey, hydrationPromise);
+  try {
+    return await hydrationPromise;
+  } finally {
+    IN_FLIGHT_HYDRATIONS.delete(lockKey);
+  }
+}
+
 export function setDuckDBSample(
   tableName: string,
   sampleRows: any[],

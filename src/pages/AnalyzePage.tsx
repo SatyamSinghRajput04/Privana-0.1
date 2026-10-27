@@ -10,7 +10,7 @@ import { useVaultStore } from '../store/useVaultStore';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { useCockpitStore } from '../store/useCockpitStore';
 import { useAnswerWorkspaceStore } from '../store/useAnswerWorkspaceStore';
-import { isTableLoaded, loadCSV, loadJSON, setTableOwner, getTableOwner, getTableRowCount, getTableRows, getSqlTableName } from '../lib/sqlEngine';
+import { isTableLoaded, loadCSV, loadJSON, setTableOwner, getTableOwner, getTableRowCount, getTableRows, getSqlTableName, ensureTableHydrated, HydrationResult } from '../lib/sqlEngine';
 import { localDB } from '../lib/indexedDb';
 import { DatasetValidator } from '../domain/validator/validator';
 import { SchemaIntelligence } from '../domain/analytics/schemaIntelligence';

@@ -1155,7 +1155,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
           });
         }
       } else if (committedVisual.kind === 'distributionBins') {
-        const total = committedVisual.data.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
+        const total = result.provenance?.totalLoadedRows || committedVisual.data.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
         kpis.push({
           label: 'Metric Analyzed',
           value: committedVisual.metricName || '',
@@ -1246,12 +1246,15 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   // Compile a perfect 4-column KPI cards list just like Power BI!
   const displayKpis = [...layout.kpis];
   
+  const isDuckEngine = result.provenance?.engine === 'duckdb-wasm';
+  const isFullScope = result.provenance?.scope === 'full-dataset';
+
   if (displayKpis.length < 4) {
     const recordCount = result.data?.rows?.length || 0;
     displayKpis.push({
       label: 'ROWS RETURNED',
       value: recordCount.toLocaleString(),
-      subText: 'DuckDB query output rows',
+      subText: isDuckEngine ? 'DuckDB query output rows' : 'In-memory query output rows',
       color: '#ef4444', // Red/Coral theme color
     });
   }
@@ -1259,8 +1262,8 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   if (displayKpis.length < 4) {
     displayKpis.push({
       label: 'LOCAL SECURITY',
-      value: 'DuckDB Enclave',
-      subText: '100% private in-browser',
+      value: isDuckEngine ? 'DuckDB Enclave' : 'In-Memory Enclave',
+      subText: isFullScope ? '100% full-population verified' : 'Sampled local compute',
       color: '#10b981', // Emerald green security color
     });
   }

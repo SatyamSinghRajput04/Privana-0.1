@@ -155,6 +155,7 @@ export default function DatasetsPage({ setPage }: P) {
         
         // Save data in IndexedDB
         await localDB.saveDatasetCSV(name, csvHeader);
+        await localDB.saveDatasetBlob(name, new Blob([csvHeader], { type: 'text/csv' }), d.id, rows);
         
         if (!selectedDataset) setSelectedDataset(d);
         await loadDatasets(ws.id);
@@ -182,6 +183,7 @@ export default function DatasetsPage({ setPage }: P) {
         const csvStr = sampleData.map(r => Object.values(r).join(',')).join('\n');
         const csvHeader = Object.keys(sampleData[0]).join(',') + '\n' + csvStr;
         await localDB.saveDatasetCSV(name, csvHeader);
+        await localDB.saveDatasetBlob(name, new Blob([csvHeader], { type: 'text/csv' }), d.id, rows);
         
         if (!selectedDataset) setSelectedDataset(d);
         await loadDatasets(ws.id);
@@ -289,14 +291,8 @@ export default function DatasetsPage({ setPage }: P) {
           // 5. Store bounded sample in sqlEngine for metadata bridges
           setDuckDBSample(f.name, sampleRows, totalRowCount, realColsMeta);
 
-          // 6. Save sample CSV header in IndexedDB for fast reload previews without storing 100MB
-          if (sampleRows.length > 0) {
-            const headerLine = Object.keys(sampleRows[0]).join(',');
-            const sampleLines = sampleRows.slice(0, 10).map(r => 
-              Object.values(r).map(v => typeof v === 'string' && v.includes(',') ? `"${v}"` : String(v ?? '')).join(',')
-            ).join('\n');
-            await localDB.saveDatasetCSV(f.name, headerLine + '\n' + sampleLines);
-          }
+          // 6. Save complete File binary in IndexedDB for deterministic hydration & full-dataset analytics
+          await localDB.saveDatasetBlob(f.name, f, undefined, totalRowCount);
         } catch (duckErr: any) {
           console.warn('[DatasetsPage] DuckDB VFS ingestion failed:', duckErr);
           // If a file is over 20MB, NEVER fall back to PapaParse on the main thread!
@@ -336,6 +332,7 @@ export default function DatasetsPage({ setPage }: P) {
 
       const d = await registerDataset(f.name, f.name.split('.').pop() || 'csv', totalRowCount, realColsMeta.length, f.size, realColsMeta);
       setTableOwner(f.name, d.id);
+      await localDB.saveDatasetBlob(f.name, f, d.id, totalRowCount);
       if (!selectedDataset) setSelectedDataset(d);
       await loadDatasets(ws!.id);
     } catch (err: any) {

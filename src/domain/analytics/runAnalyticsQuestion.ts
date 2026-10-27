@@ -18,7 +18,7 @@ import { useCockpitStore } from '../../store/useCockpitStore';
 import { SummaryExecutor } from './executors/summary';
 import { DistributionExecutor } from './executors/distribution';
 import { DataSource, computeEngine } from '../compute';
-import { DUCKDB_TABLES, getSqlTableName } from '../../lib/sqlEngine';
+import { DUCKDB_TABLES, DUCKDB_ROW_COUNTS, getSqlTableName } from '../../lib/sqlEngine';
 import { GroupedAverageExecutor } from './executors/groupedAverage';
 import { CorrelationExecutor } from './executors/correlation';
 import { FeatureImportanceExecutor } from './executors/featureImportance';
@@ -83,12 +83,22 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
   const rows = ctx.rows;
   const profile = ctx.profile;
 
-  const buildProvenance = () => ({
+  const sqlTable = tableName ? getSqlTableName(tableName) : '';
+  const isDuckDB = Boolean(sqlTable && DUCKDB_TABLES.has(sqlTable));
+  const totalLoaded = isDuckDB ? (DUCKDB_ROW_COUNTS.get(sqlTable) || ctx.totalRowCount || rows.length) : (ctx.totalRowCount || rows.length);
+
+  const buildProvenance = (customStatus?: 'success' | 'partial' | 'failed', eligibleRowsCount?: number) => ({
     question,
     planGeneratedAt: new Date(),
     executionTimeMs: Date.now() - startTime,
     plannerAttempts: 1,
-    engine: (typeof tableName === 'string' && DUCKDB_TABLES.has(getSqlTableName(tableName))) ? 'DuckDB-WASM Local Engine' : 'InMemory Engine'
+    engine: isDuckDB ? ('duckdb-wasm' as const) : ('in-memory' as const),
+    scope: isDuckDB ? ('full-dataset' as const) : ('sampled' as const),
+    datasetId: tableName,
+    totalLoadedRows: totalLoaded,
+    eligibleRows: eligibleRowsCount !== undefined ? eligibleRowsCount : totalLoaded,
+    executedAtIso: new Date().toISOString(),
+    status: customStatus || 'success'
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -470,6 +480,7 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       reasons.push(METADATA_BYPASS_WARNING);
     }
 
+    const eligibleCount = execResult.metadata?.totalEligibleRows ?? totalLoaded;
     const finalResult: AnalyticsResult = reasons.length > 0 ? {
       status: 'partial',
       plan,
@@ -477,14 +488,14 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       chart: chartSpec,
       narrative,
       reasons,
-      provenance: buildProvenance(),
+      provenance: buildProvenance('partial', eligibleCount),
     } : {
       status: 'computed',
       plan,
       data: execResult,
       chart: chartSpec,
       narrative,
-      provenance: buildProvenance(),
+      provenance: buildProvenance('success', eligibleCount),
     };
 
     try {

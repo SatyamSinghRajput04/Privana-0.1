@@ -43,10 +43,20 @@ export interface AnalysisPlan {
   datasetHash?: string;
 }
 
-export interface Provenance {
+export interface ExecutionProvenance {
+  engine?: 'duckdb-wasm' | 'in-memory';
+  scope?: 'full-dataset' | 'sampled';
+  datasetId?: string;
+  totalLoadedRows?: number;
+  eligibleRows?: number;
+  executionTimeMs: number;
+  executedAtIso?: string;
+  status?: 'success' | 'partial' | 'failed';
+}
+
+export interface Provenance extends ExecutionProvenance {
   question: string;
   planGeneratedAt: Date;
-  executionTimeMs: number;
   plannerAttempts: number;
 }
 

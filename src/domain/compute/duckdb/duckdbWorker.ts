@@ -63,14 +63,21 @@ export async function registerVfsFile(tableName: string, file: File): Promise<vo
   const db = await getDuckDBInstance();
   const conn = await getDuckDBConnection();
 
-  // Register the file handle for paged lazy reads
-  await db.registerFileHandle(file.name, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+  // Deterministic, sanitized VFS identifier decoupled from OS filename
+  const sanitizedVfsName = `vfs_${tableName.replace(/[^a-zA-Z0-9_]/g, '_')}.csv`;
 
-  // Create an analytical view over the streaming file with resilient CSV parsing options
+  // Safely register or re-register the file handle
+  try {
+    await (db as any).dropFile?.(sanitizedVfsName);
+  } catch {}
+
+  await db.registerFileHandle(sanitizedVfsName, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+
+  // Materialize into columnar in-memory table for sub-millisecond repeated queries
   await conn.query(`
-    CREATE OR REPLACE VIEW "${tableName}" AS 
+    CREATE OR REPLACE TABLE "${tableName}" AS 
     SELECT * FROM read_csv_auto(
-      '${file.name}',
+      '${sanitizedVfsName}',
       ignore_errors = true,
       null_padding = true,
       sample_size = 100000

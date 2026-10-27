@@ -9,7 +9,11 @@ const DB_VERSION = 2;
 
 export interface CachedDataset {
   name: string;
-  csvContent: string;
+  csvContent?: string;
+  blob?: Blob;
+  datasetId?: string | number;
+  rowCount?: number;
+  sizeBytes?: number;
   updatedAt: number;
 }
 
@@ -114,6 +118,62 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 export const localDB = {
+  // --- Datasets Storage (Binary Blob & CSV Caching) ---
+  async saveDatasetBlob(name: string, blob: Blob, datasetId?: string | number, rowCount?: number): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('datasets', 'readwrite');
+      const store = transaction.objectStore('datasets');
+      const item: CachedDataset = {
+        name,
+        blob,
+        datasetId,
+        rowCount,
+        sizeBytes: blob.size,
+        updatedAt: Date.now()
+      };
+      const request = store.put(item);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  },
+
+  async getDatasetRecord(name: string): Promise<CachedDataset | null> {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const transaction = db.transaction('datasets', 'readonly');
+      const store = transaction.objectStore('datasets');
+      const request = store.get(name);
+      request.onsuccess = () => {
+        const res = request.result as CachedDataset | undefined;
+        resolve(res || null);
+      };
+      request.onerror = () => resolve(null);
+    });
+  },
+
+  async getDatasetFile(name: string, datasetId?: string | number, expectedRowCount?: number): Promise<{ file: File; rowCount?: number; isLegacy: boolean } | null> {
+    const record = await this.getDatasetRecord(name);
+    if (!record) return null;
+
+    const rowCount = expectedRowCount || record.rowCount;
+
+    if (record.blob) {
+      const file = new File([record.blob], name, { type: 'text/csv' });
+      return { file, rowCount, isLegacy: false };
+    }
+
+    if (record.csvContent) {
+      // Detect legacy 10-line preview: if expected rowCount is high but string has <= 15 lines
+      const lineCount = (record.csvContent.match(/\n/g) || []).length;
+      const isLegacy = Boolean(rowCount && rowCount > 50 && lineCount <= 15);
+      const file = new File([record.csvContent], name, { type: 'text/csv' });
+      return { file, rowCount, isLegacy };
+    }
+
+    return null;
+  },
+
   // --- Datasets Storage (CSV Caching) ---
   async saveDatasetCSV(name: string, csvContent: string): Promise<void> {
     const db = await openDB();
@@ -139,7 +199,7 @@ export const localDB = {
       const request = store.get(name);
       request.onsuccess = () => {
         const res = request.result as CachedDataset | undefined;
-        resolve(res ? res.csvContent : null);
+        resolve((res && res.csvContent) ? res.csvContent : null);
       };
       request.onerror = () => resolve(null);
     });

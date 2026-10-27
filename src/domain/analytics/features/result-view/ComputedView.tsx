@@ -304,28 +304,38 @@ const PremiumCircularGauge: React.FC<{ value: string | number; sub?: string }> =
 };
 
 const PremiumNarrativePanel: React.FC<{ text: string; provenance?: any }> = ({ text }) => {
-  const highlightTakeaways = (sentence: string) => {
-    // Highlight based on Markdown **bold** syntax injected by the facts compiler
-    // and standalone numbers
-    const formatted = sentence.replace(
-      /(\*\*[^*]+\*\*)|(\b\d+(?:\.\d+)?\b)/gi,
-      (match, boldMatch, numMatch) => {
-        if (boldMatch) {
-          const innerText = boldMatch.slice(2, -2);
-          // If the bolded text is a number
-          if (/^\d+(?:\.\d+)?$/.test(innerText)) {
-            return `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">${innerText}</span>`;
-          }
-          // Otherwise, it's a category or column name
-          return `<span class="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 font-bold text-[9px]">${innerText.replace(/_/g, ' ')}</span>`;
-        }
-        if (numMatch) {
-           return `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">${numMatch}</span>`;
-        }
-        return match;
+  const highlightTakeaways = (sentence: string): React.ReactNode => {
+    const parts: React.ReactNode[] = [];
+    const pattern = /(\b\d+(?:\.\d+)?%?\b)|(\b[A-Z][a-z0-9_-]{2,}\b)/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    let idx = 0;
+
+    while ((m = pattern.exec(sentence)) !== null) {
+      if (m.index > last) {
+        parts.push(sentence.slice(last, m.index));
       }
-    );
-    return <span dangerouslySetInnerHTML={{ __html: formatted }} />;
+      const [match, numMatch, catMatch] = m;
+      if (numMatch) {
+        parts.push(
+          <span key={idx++} className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 font-bold font-mono text-[9px] tabular-nums">
+            {numMatch}
+          </span>
+        );
+      } else if (catMatch) {
+        parts.push(
+          <span key={idx++} className="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 font-bold text-[9px]">
+            {catMatch.replace(/_/g, ' ')}
+          </span>
+        );
+      }
+      last = m.index + match.length;
+    }
+    if (last < sentence.length) {
+      parts.push(sentence.slice(last));
+    }
+
+    return <span>{parts}</span>;
   };
 
   // We do not strip asterisks anymore because highlightTakeaways processes them.
@@ -417,7 +427,7 @@ const PremiumNarrativePanel: React.FC<{ text: string; provenance?: any }> = ({ t
           </div>
           <div className="flex items-start gap-2">
             <span className="text-cyan-400 font-extrabold mt-0.5">✔</span>
-            <span className="flex-1">All decisions are backed by 100% private SQLite data sandboxing without external network telemetry.</span>
+            <span className="flex-1">All decisions are backed by 100% private DuckDB-WASM data sandboxing without external network telemetry.</span>
           </div>
         </div>
       </div>
@@ -1225,7 +1235,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
           <div>
             <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">No matching records found</h3>
             <p className="text-[11px] text-zinc-500 max-w-sm mt-1 mx-auto leading-relaxed">
-              The query executed successfully on the local SQLite engine, but the active database query returned zero rows. Try broadening your criteria or selecting another schema field.
+              The query executed successfully on the local DuckDB engine, but the active database query returned zero rows. Try broadening your criteria or selecting another schema field.
             </p>
           </div>
         </div>
@@ -1241,7 +1251,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
     displayKpis.push({
       label: 'ROWS RETURNED',
       value: recordCount.toLocaleString(),
-      subText: 'SQLite query output rows',
+      subText: 'DuckDB query output rows',
       color: '#ef4444', // Red/Coral theme color
     });
   }
@@ -1249,7 +1259,7 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
   if (displayKpis.length < 4) {
     displayKpis.push({
       label: 'LOCAL SECURITY',
-      value: 'SQLite Sandbox',
+      value: 'DuckDB Enclave',
       subText: '100% private in-browser',
       color: '#10b981', // Emerald green security color
     });

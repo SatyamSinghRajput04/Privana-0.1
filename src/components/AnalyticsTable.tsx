@@ -184,7 +184,7 @@ export function AnalyticsTable({ rows, maxRows = 200 }: Props) {
       <div className="w-full bg-zinc-950/45 border border-zinc-900/80 p-2.5 rounded-lg shrink-0 mt-2 flex items-center justify-between text-[8px] font-mono text-zinc-500 select-none">
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-zinc-400 font-black uppercase">SQLite Datagrid Active</span>
+          <span className="text-zinc-400 font-black uppercase">Local Datagrid Active</span>
           <span className="text-zinc-600">|</span>
           <span>{rows.length} rows scanned</span>
         </div>

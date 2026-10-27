@@ -29,6 +29,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
+  DataSource,
   ComputeEngine,
   GroupedAggregateRow,
   PairProfile,
@@ -55,8 +56,26 @@ function readValue(raw: any, encoding?: BinaryEncoding): number {
   return encoding ? encodeBinary(raw, encoding) : Number(raw);
 }
 
+/**
+ * Resolves raw rows from a DataSource or array.
+ * CRITICAL INVARIANT: Prohibits silent fallback when a DuckDB table is targeted.
+ */
+function extractRows(source: DataSource | any[]): any[] {
+  if (Array.isArray(source)) return source;
+  if (source && source.kind === 'in-memory-rows') return source.rows;
+  if (source && source.kind === 'duckdb-table') {
+    throw new Error(
+      `[InMemoryComputeEngine Invariant Violation] Cannot calculate full-dataset statistics on DuckDB table "${source.tableName}". ` +
+      `Only a partial preview sample is in JavaScript memory. To protect analytical integrity, silent fallback is prohibited. ` +
+      `Full-dataset queries must execute via DuckDBComputeEngine.`
+    );
+  }
+  return [];
+}
+
 export const inMemoryComputeEngine: ComputeEngine = {
-  groupedAggregate(rows: any[], metric: string, groupBy: string): GroupedAggregateRow[] {
+  groupedAggregate(source: DataSource | any[], metric: string, groupBy: string): GroupedAggregateRow[] {
+    const rows = extractRows(source);
     if (!rows || rows.length === 0) return [];
 
     const groups: Record<string, { sum: number; count: number }> = {};
@@ -79,7 +98,8 @@ export const inMemoryComputeEngine: ComputeEngine = {
     }));
   },
 
-  profilePair(rows: any[], xColumn: string, yColumn: string, distinctCap = 3): PairProfile {
+  profilePair(source: DataSource | any[], xColumn: string, yColumn: string, distinctCap = 3): PairProfile {
+    const rows = extractRows(source);
     const profile: PairProfile = {
       count: 0,
       xAllNumeric: true,
@@ -128,7 +148,8 @@ export const inMemoryComputeEngine: ComputeEngine = {
     return profile;
   },
 
-  moments(rows: any[], request: MomentsRequest): PairMoments {
+  moments(source: DataSource | any[], request: MomentsRequest): PairMoments {
+    const rows = extractRows(source);
     const m: PairMoments = {
       count: 0,
       shiftX: 0,
@@ -185,7 +206,8 @@ export const inMemoryComputeEngine: ComputeEngine = {
     return m;
   },
 
-  samplePoints(rows: any[], request: MomentsRequest, limit: number): { x: number; y: number }[] {
+  samplePoints(source: DataSource | any[], request: MomentsRequest, limit: number): { x: number; y: number }[] {
+    const rows = extractRows(source);
     if (!rows || rows.length === 0 || limit <= 0) return [];
 
     const { xColumn, yColumn, xEncoding, yEncoding } = request;
@@ -213,7 +235,8 @@ export const inMemoryComputeEngine: ComputeEngine = {
     return reservoir;
   },
 
-  distribution(rows: any[], column: string): DistributionResult {
+  distribution(source: DataSource | any[], column: string): DistributionResult {
+    const rows = extractRows(source);
     if (!rows || rows.length === 0 || !column) {
       return { isNumeric: false, rows: [], totalCount: 0 };
     }
@@ -326,5 +349,17 @@ export const inMemoryComputeEngine: ComputeEngine = {
       rows: distributionRows,
       totalCount: presentCount
     };
+  },
+
+  ranking(source: DataSource | any[], metric: string, limit: number, groupBy?: string): any[] {
+    const rows = extractRows(source);
+    if (groupBy) {
+      const groups = (this.groupedAggregate(rows, metric, groupBy) as GroupedAggregateRow[]);
+      groups.sort((a: any, b: any) => b.average_value - a.average_value);
+      return groups.slice(0, limit);
+    }
+    const valid = rows.filter(r => r[metric] !== null && r[metric] !== undefined && !isNaN(Number(r[metric])));
+    valid.sort((a, b) => Number(b[metric]) - Number(a[metric]));
+    return valid.slice(0, limit);
   }
 };

@@ -22,6 +22,12 @@
 //   Stage 2.5: profilePair, moments, samplePoints  (CorrelationExecutor)
 // ─────────────────────────────────────────────────────────────────────────────
 
+export type DataSource =
+  | { kind: 'duckdb-table'; tableName: string }
+  | { kind: 'in-memory-rows'; rows: any[] };
+
+export type MaybePromise<T> = T | Promise<T>;
+
 export interface GroupedAggregateRow {
   category_label: string;
   average_value: number;
@@ -165,14 +171,23 @@ export interface ComputeEngine {
    * order is retrieval order, not ranked — ranking/sorting is an executor
    * concern, not a data-access concern.
    */
-  groupedAggregate(rows: any[], metric: string, groupBy: string): GroupedAggregateRow[];
+  groupedAggregate(
+    source: DataSource | any[],
+    metric: string,
+    groupBy: string
+  ): MaybePromise<GroupedAggregateRow[]>;
 
   /**
    * One-pass scan of a column pair returning the facts needed to select a
    * statistical method. `distinctCap` bounds how many distinct values are
    * collected per column.
    */
-  profilePair(rows: any[], xColumn: string, yColumn: string, distinctCap?: number): PairProfile;
+  profilePair(
+    source: DataSource | any[],
+    xColumn: string,
+    yColumn: string,
+    distinctCap?: number
+  ): PairProfile;
 
   /**
    * One-pass accumulation of pairwise sufficient statistics. Rows where
@@ -181,7 +196,10 @@ export interface ComputeEngine {
    * A column with no encoding is read via Number(); a column with a
    * BinaryEncoding is read as 1/0 against its positiveValue.
    */
-  moments(rows: any[], request: MomentsRequest): PairMoments;
+  moments(
+    source: DataSource | any[],
+    request: MomentsRequest
+  ): MaybePromise<PairMoments>;
 
   /**
    * Bounded {x, y} point set for scatter rendering — NOT for statistics.
@@ -190,11 +208,28 @@ export interface ComputeEngine {
    * statistic is computed on 100% of rows while the chart draws a bounded
    * sample, so visual limits never degrade statistical correctness.
    */
-  samplePoints(rows: any[], request: MomentsRequest, limit: number): { x: number; y: number }[];
+  samplePoints(
+    source: DataSource | any[],
+    request: MomentsRequest,
+    limit: number
+  ): MaybePromise<{ x: number; y: number }[]>;
 
   /**
    * Computes histogram bins for numeric columns (via Sturges' rule) or
    * frequency distribution for categorical columns.
    */
-  distribution(rows: any[], column: string): DistributionResult;
+  distribution(
+    source: DataSource | any[],
+    column: string
+  ): MaybePromise<DistributionResult>;
+
+  /**
+   * Computes top-N records or grouped summaries.
+   */
+  ranking?(
+    source: DataSource | any[],
+    metric: string,
+    limit: number,
+    groupBy?: string
+  ): MaybePromise<any[]>;
 }

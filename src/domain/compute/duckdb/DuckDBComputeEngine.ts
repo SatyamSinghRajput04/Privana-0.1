@@ -11,18 +11,17 @@
 //   Only compact aggregated results (~20 rows or 1 moment row) cross into JS.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import {
-  ComputeEngine,
+import { DataSource, ComputeEngine,
   GroupedAggregateRow,
   PairProfile,
   PairMoments,
   MomentsRequest,
   BinaryEncoding,
   DistributionBin,
-  DistributionResult
-} from '../ComputeEngine';
+  DistributionResult } from '../ComputeEngine';
 import { inMemoryComputeEngine } from '../inMemoryComputeEngine';
 import { pearsonFromMoments } from '../../safeCompute/relationshipRanker';
+import { DUCKDB_TABLES } from '../../../lib/sqlEngine';
 import { getDuckDBConnection, registerMemoryTable } from './duckdbWorker';
 
 /**
@@ -42,29 +41,124 @@ function buildColumnExpr(column: string, encoding?: BinaryEncoding): string {
   return `CASE WHEN "${column}" = ${pos} THEN 1.0 ELSE 0.0 END`;
 }
 
+
+/**
+ * Safely normalizes DataSource input into table or row targeting.
+ */
+function resolveSource(source: DataSource | any[]): { isTable: boolean; tableName: string; rows: any[] } {
+  if (Array.isArray(source)) {
+    return { isTable: false, tableName: '', rows: source };
+  }
+  if (source && source.kind === 'duckdb-table') {
+    return { isTable: true, tableName: source.tableName, rows: [] };
+  }
+  if (source && source.kind === 'in-memory-rows') {
+    return { isTable: false, tableName: '', rows: source.rows };
+  }
+  if (typeof source === 'string') {
+    return { isTable: true, tableName: source, rows: [] };
+  }
+  return { isTable: false, tableName: '', rows: [] };
+}
+
 export class DuckDBComputeEngine implements ComputeEngine {
-  /**
-   * Synchronous interface implementations fallback to inMemoryComputeEngine
-   * when row arrays are passed in memory during the shadow migration.
-   */
-  groupedAggregate(rows: any[], metric: string, groupBy: string): GroupedAggregateRow[] {
-    return inMemoryComputeEngine.groupedAggregate(rows, metric, groupBy);
+  groupedAggregate(
+    source: DataSource | any[],
+    metric: string,
+    groupBy: string
+  ): any {
+    const res = resolveSource(source);
+    if (res.isTable) {
+      return this.queryGroupedAggregate(res.tableName, metric, groupBy);
+    }
+    return inMemoryComputeEngine.groupedAggregate(res.rows, metric, groupBy);
   }
 
-  profilePair(rows: any[], xColumn: string, yColumn: string, distinctCap: number = 20): PairProfile {
-    return inMemoryComputeEngine.profilePair(rows, xColumn, yColumn, distinctCap);
+  profilePair(
+    source: DataSource | any[],
+    xColumn: string,
+    yColumn: string,
+    distinctCap: number = 20
+  ): PairProfile {
+    const res = resolveSource(source);
+    return inMemoryComputeEngine.profilePair(res.rows, xColumn, yColumn, distinctCap);
   }
 
-  moments(rows: any[], request: MomentsRequest): PairMoments {
-    return inMemoryComputeEngine.moments(rows, request);
+  moments(
+    source: DataSource | any[],
+    request: MomentsRequest
+  ): any {
+    const res = resolveSource(source);
+    if (res.isTable) {
+      return this.queryMoments(res.tableName, request);
+    }
+    return inMemoryComputeEngine.moments(res.rows, request);
   }
 
-  samplePoints(rows: any[], request: MomentsRequest, limit: number): { x: number; y: number }[] {
-    return inMemoryComputeEngine.samplePoints(rows, request, limit);
+  samplePoints(
+    source: DataSource | any[],
+    request: MomentsRequest,
+    limit: number
+  ): any {
+    const res = resolveSource(source);
+    if (res.isTable) {
+      return this.querySamplePoints(res.tableName, request, limit);
+    }
+    return inMemoryComputeEngine.samplePoints(res.rows, request, limit);
   }
 
-  distribution(rows: any[], column: string): DistributionResult {
-    return inMemoryComputeEngine.distribution(rows, column);
+  distribution(
+    source: DataSource | any[],
+    column: string
+  ): any {
+    const res = resolveSource(source);
+    if (res.isTable) {
+      return this.queryDistribution(res.tableName, column);
+    }
+    return inMemoryComputeEngine.distribution(res.rows, column);
+  }
+
+
+  async queryRanking(tableName: string, metric: string, limit: number): Promise<any[]> {
+    const conn = await getDuckDBConnection();
+    const sql = `
+      SELECT *
+      FROM "${tableName}"
+      WHERE "${metric}" IS NOT NULL AND TRY_CAST("${metric}" AS DOUBLE) IS NOT NULL
+      ORDER BY TRY_CAST("${metric}" AS DOUBLE) DESC
+      LIMIT ${limit};
+    `;
+    const res = await conn.query(sql);
+    const rows: any[] = [];
+    for (let i = 0; i < res.numRows; i++) {
+      const obj: any = {};
+      for (const field of res.schema.fields) {
+        obj[field.name] = res.getChild(field.name)?.get(i);
+      }
+      rows.push(obj);
+    }
+    return rows;
+  }
+
+  async ranking(
+    source: DataSource | any[],
+    metric: string,
+    limit: number,
+    groupBy?: string
+  ): Promise<any[]> {
+    const res = resolveSource(source);
+    if (res.isTable) {
+      if (groupBy) {
+        const groups = await this.queryGroupedAggregate(res.tableName, metric, groupBy);
+        groups.sort((a, b) => b.average_value - a.average_value);
+        return groups.slice(0, limit);
+      }
+      return this.queryRanking(res.tableName, metric, limit);
+    }
+    if (inMemoryComputeEngine.ranking) {
+      return inMemoryComputeEngine.ranking(res.rows, metric, limit, groupBy);
+    }
+    return [];
   }
 
   // ── Asynchronous Vectorized Pushdown Methods (DuckDB Kernel) ─────────────────

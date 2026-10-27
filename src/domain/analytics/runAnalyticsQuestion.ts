@@ -17,6 +17,8 @@ import { useCockpitStore } from '../../store/useCockpitStore';
 // Executors
 import { SummaryExecutor } from './executors/summary';
 import { DistributionExecutor } from './executors/distribution';
+import { DataSource, computeEngine } from '../compute';
+import { DUCKDB_TABLES, getSqlTableName } from '../../lib/sqlEngine';
 import { GroupedAverageExecutor } from './executors/groupedAverage';
 import { CorrelationExecutor } from './executors/correlation';
 import { FeatureImportanceExecutor } from './executors/featureImportance';
@@ -86,6 +88,7 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     planGeneratedAt: new Date(),
     executionTimeMs: Date.now() - startTime,
     plannerAttempts: 1,
+    engine: (typeof tableName === 'string' && DUCKDB_TABLES.has(getSqlTableName(tableName))) ? 'DuckDB-WASM Local Engine' : 'InMemory Engine'
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -300,7 +303,13 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       execRows = reservoir;
     }
 
-    // STEP 6 — Executor dispatch wrapped in try/catch
+    // STEP 6 — Table-First / In-Memory DataSource derivation & Executor dispatch
+    const sqlTable = tableName ? getSqlTableName(tableName) : '';
+    const isDuckDB = sqlTable ? DUCKDB_TABLES.has(sqlTable) : false;
+    const dataSource: DataSource = isDuckDB
+      ? { kind: 'duckdb-table', tableName: sqlTable }
+      : { kind: 'in-memory-rows', rows: execRows };
+
     let execResult: ExecutorResult;
     try {
       switch (plan.intent) {
@@ -308,19 +317,19 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
           execResult = SummaryExecutor.execute(plan, execRows);
           break;
         case 'distribution':
-          execResult = DistributionExecutor.execute(plan, execRows);
+          execResult = await DistributionExecutor.execute(plan, dataSource, computeEngine);
           break;
         case 'grouped_average':
-          execResult = GroupedAverageExecutor.execute(plan, execRows);
+          execResult = await GroupedAverageExecutor.execute(plan, dataSource, computeEngine);
           break;
         case 'correlation':
-          execResult = CorrelationExecutor.execute(plan, execRows);
+          execResult = await CorrelationExecutor.execute(plan, dataSource, computeEngine);
           break;
         case 'feature_importance':
           execResult = FeatureImportanceExecutor.execute(plan, execRows);
           break;
         case 'ranking':
-          execResult = RankingExecutor.execute(plan, execRows);
+          execResult = await RankingExecutor.execute(plan, dataSource, computeEngine);
           break;
         case 'filter':
           execResult = FilterExecutor.execute(plan, execRows);

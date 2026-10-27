@@ -110,7 +110,7 @@ export function QueryReadyState({
           },
           { 
             label: 'ENGINE STATUS', 
-            value: 'SQLite Sandbox', 
+            value: 'DuckDB Enclave', 
             sub: 'Local private sandbox', 
             variant: 'emerald', 
             icon: <Shield size={13} className="text-emerald-400" />,

@@ -5,16 +5,25 @@
 
 import { AnalysisPlan, ExecutorResult } from '../types';
 import { GroupedAverageExecutor } from './groupedAverage';
+import { computeEngine, ComputeEngine, DataSource, MaybePromise } from '../../compute';
 
 export const RankingExecutor = {
   /**
    * Computes top-N records or groups ordered by plan.metric.
+   * Agnostic to data storage: accepts either in-memory row array or DuckDB table source.
    */
-  execute(plan: AnalysisPlan, rows: any[]): ExecutorResult {
+  execute(
+    plan: AnalysisPlan,
+    source: DataSource | any[],
+    engine: ComputeEngine = computeEngine
+  ): MaybePromise<ExecutorResult> {
     const metric = plan.metric;
     const groupBy = plan.groupBy;
 
-    if (!metric || !rows || rows.length === 0) {
+    if (!metric || !source) {
+      return { status: 'partial_missing', rows: [] };
+    }
+    if (Array.isArray(source) && source.length === 0) {
       return { status: 'partial_missing', rows: [] };
     }
 
@@ -34,72 +43,92 @@ export const RankingExecutor = {
       }
     }
 
-    let rankedRows: any[] = [];
-    let status: 'success' | 'partial_small_n' | 'partial_missing' = 'success';
-    let metadata: Record<string, any> = { metric };
-
     if (groupBy && groupBy.length > 0) {
-      // Grouped ranking (e.g. top platforms by average stress)
-      const groupRes = GroupedAverageExecutor.execute(plan, rows);
-      if (groupRes.status === 'partial_missing') {
-        return groupRes;
-      }
-      rankedRows = groupRes.rows.slice(0, limit);
-      status = groupRes.status;
-      metadata = {
-        ...metadata,
-        ...groupRes.metadata,
-        limit,
-        isGrouped: true
-      };
-    } else {
-      // Individual record ranking (e.g. top 5 records by sleep_hours)
-      const topN: any[] = [];
-      let validCount = 0;
+      // Grouped ranking (e.g. top payment types by average payment value)
+      const resOrPromise = GroupedAverageExecutor.execute(plan, source, engine);
 
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        const v = r[metric];
-        if (v === null || v === undefined || v === '') continue;
-        const numV = Number(v);
-        if (isNaN(numV)) continue;
-        
-        validCount++;
-
-        // Project only key identifiers and target metric (Safeguard: avoid wide schema memory bloat)
-        const labelKey = Object.keys(r).find(k => k.toLowerCase() === 'name' || k.toLowerCase() === 'title' || k.toLowerCase() === 'label') || 'id';
-        const projectedItem: Record<string, any> = {
-          id: r.id,
-          [metric]: numV,
-          metric_value: numV
-        };
-        if (r[labelKey] !== undefined) projectedItem[labelKey] = r[labelKey];
-
-        if (topN.length < limit) {
-          topN.push(projectedItem);
-          topN.sort((a, b) => b.metric_value - a.metric_value);
-        } else if (numV > topN[topN.length - 1].metric_value) {
-          topN[topN.length - 1] = projectedItem;
-          topN.sort((a, b) => b.metric_value - a.metric_value);
+      const formatGrouped = (groupRes: ExecutorResult): ExecutorResult => {
+        if (groupRes.status === 'partial_missing') {
+          return groupRes;
         }
-      }
-
-      rankedRows = topN.map((row, idx) => ({
-        ...row,
-        rank_label: row.id ? String(row.id) : `Rank ${idx + 1}`,
-      }));
-      status = validCount < 5 ? 'partial_small_n' : 'success';
-      metadata = {
-        ...metadata,
-        limit,
-        isGrouped: false
+        return {
+          status: groupRes.status,
+          rows: groupRes.rows.slice(0, limit),
+          metadata: {
+            metric,
+            ...groupRes.metadata,
+            limit,
+            isGrouped: true
+          }
+        };
       };
+
+      if (resOrPromise instanceof Promise) {
+        return resOrPromise.then(formatGrouped);
+      }
+      return formatGrouped(resOrPromise);
+    }
+
+    // Individual record ranking (e.g. top 5 records by payment_value)
+    if (engine.ranking) {
+      const resOrPromise = engine.ranking(source, metric, limit);
+
+      const formatRanked = (rankedRows: any[]): ExecutorResult => {
+        if (!rankedRows || rankedRows.length === 0) {
+          return { status: 'partial_missing', rows: [] };
+        }
+        return {
+          status: rankedRows.length < 5 ? 'partial_small_n' : 'success',
+          rows: rankedRows,
+          metadata: {
+            metric,
+            limit,
+            isGrouped: false,
+            totalEligibleRows: rankedRows.length
+          }
+        };
+      };
+
+      if (resOrPromise instanceof Promise) {
+        return resOrPromise.then(formatRanked);
+      }
+      return formatRanked(resOrPromise);
+    }
+
+    // Fallback if engine does not implement ranking: in-memory row projection
+    const rows = Array.isArray(source) ? source : (source.kind === 'in-memory-rows' ? source.rows : []);
+    const topN: any[] = [];
+    let validCount = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const v = r[metric];
+      if (v === null || v === undefined || v === '') continue;
+      const numV = Number(v);
+      if (isNaN(numV)) continue;
+
+      validCount++;
+      const labelKey = Object.keys(r).find(k => k.toLowerCase() === 'name' || k.toLowerCase() === 'title' || k.toLowerCase() === 'label') || 'id';
+      const projectedItem: Record<string, any> = {
+        id: r.id,
+        [metric]: numV,
+        metric_value: numV
+      };
+      if (r[labelKey] !== undefined) projectedItem[labelKey] = r[labelKey];
+
+      if (topN.length < limit) {
+        topN.push(projectedItem);
+        topN.sort((a, b) => b.metric_value - a.metric_value);
+      } else if (numV > topN[topN.length - 1].metric_value) {
+        topN[topN.length - 1] = projectedItem;
+        topN.sort((a, b) => b.metric_value - a.metric_value);
+      }
     }
 
     return {
-      status,
-      rows: rankedRows,
-      metadata
+      status: validCount < 5 ? 'partial_small_n' : 'success',
+      rows: topN.map((row, idx) => ({ ...row, rank_label: row.id ? String(row.id) : `Rank ${idx + 1}` })),
+      metadata: { metric, limit, isGrouped: false }
     };
   }
 };

@@ -761,7 +761,7 @@ export function compileFiltersToSQL(tableName: string, filters: FilterClause[]):
       continue;
     }
 
-    const col = '`' + f.column + '`';
+    const col = `"${f.column.replace(/"/g, '""')}"`;
     let clauseStr = '';
 
     switch (f.operator) {

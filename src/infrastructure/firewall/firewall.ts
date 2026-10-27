@@ -74,11 +74,14 @@ export const PrivacyFirewall = {
 
     // 3. Scan and redact Credit Cards (candidate extraction + Luhn verification)
     // Matches 13 to 19 digit numbers separated by optional dashes or spaces
-    const ccCandidateRegex = /\b(?:\d[ -]*?){13,19}\b/g;
-    const ccCandidates = payload.match(ccCandidateRegex) || [];
+    // Bounded linear credit card scanner without nested backtracking quantifiers
+    const scanTarget = payload.length > 50000 ? payload.slice(0, 50000) : payload;
+    const ccCandidateRegex = /\b\d[\d\s-]{11,28}\d\b/g;
+    const ccCandidates = scanTarget.match(ccCandidateRegex) || [];
     let ccIdx = 1;
-    ccCandidates.forEach(candidate => {
-      if (isValidLuhn(candidate)) {
+    for (const candidate of ccCandidates) {
+      const clean = candidate.replace(/\D/g, '');
+      if (clean.length >= 13 && clean.length <= 19 && isValidLuhn(clean)) {
         if (!mapping[candidate]) {
           const replacement = `[CREDIT_CARD_REDACTED_${ccIdx++}]`;
           mapping[candidate] = replacement;
@@ -86,7 +89,7 @@ export const PrivacyFirewall = {
           redactedCount++;
         }
       }
-    });
+    }
 
     // 4. Scan and redact National IDs (SSN, Aadhaar, PAN)
     // SSN: matches 3-2-4 digit blocks
@@ -200,19 +203,35 @@ export const PrivacyFirewall = {
    * Computes a secure SHA-256 hash using the session salt + sanitized payload.
    * Guarantees raw PII is never part of the hash input.
    */
-  async computeHash(sanitizedPayload: string): Promise<string> {
-    const input = sessionSalt + sanitizedPayload;
+  /**
+   * Deterministically canonicalizes an object or string for tamper-evidence hashing.
+   */
+  canonicalStringify(obj: any): string {
+    if (obj === null || typeof obj !== 'object') {
+      return JSON.stringify(obj);
+    }
+    if (Array.isArray(obj)) {
+      return '[' + obj.map(item => this.canonicalStringify(item)).join(',') + ']';
+    }
+    const sortedKeys = Object.keys(obj).sort();
+    const parts = sortedKeys.map(key => JSON.stringify(key) + ':' + this.canonicalStringify(obj[key]));
+    return '{' + parts.join(',') + '}';
+  },
+
+  /**
+   * Computes deterministic SHA-256 hash over canonical payload snapshot.
+   * Proves payload immutability & tamper-evidence across audit sessions.
+   */
+  async computeHash(payload: string | object): Promise<string> {
+    const input = typeof payload === 'string' ? payload : this.canonicalStringify(payload);
     if (typeof crypto !== 'undefined' && crypto.subtle) {
       try {
         const msgUint8 = new TextEncoder().encode(input);
         const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      } catch {
-        // Fallback below
-      }
+      } catch {}
     }
-    // Headless/Simple Node.js or older browser fallback hash (Fowler-Noll-Vo FNV-1a simple 32-bit hash representation as hex)
     let hash = 2166136261;
     for (let i = 0; i < input.length; i++) {
       hash ^= input.charCodeAt(i);

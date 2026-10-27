@@ -1,3 +1,4 @@
+import { setLocalAiKillSwitch } from '../infrastructure/firewall/privacyFetch';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { 
@@ -624,7 +625,7 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
             onBypassDataset={bypassDataset}
             bypassedDatasets={bypassedDatasets}
             localAiKillSwitchActive={localAiKillSwitchActive}
-            onToggleKillSwitch={() => setLocalAiKillSwitchActive(prev => !prev)}
+            onToggleKillSwitch={() => setLocalAiKillSwitchActive(prev => { const n = !prev; setLocalAiKillSwitch(n); return n; })}
             canvasStyle={canvasStyle}
           />
 
@@ -727,7 +728,7 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
         }}
         suggestedQueries={suggestedQueries.map(s => s.query)}
         localAiKillSwitchActive={localAiKillSwitchActive}
-        onToggleKillSwitch={() => setLocalAiKillSwitchActive(prev => !prev)}
+        onToggleKillSwitch={() => setLocalAiKillSwitchActive(prev => { const n = !prev; setLocalAiKillSwitch(n); return n; })}
       />
 
       {/* Toast Notification */}

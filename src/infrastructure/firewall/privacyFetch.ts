@@ -1,4 +1,4 @@
-﻿import { PrivacyFirewall } from './firewall';
+import { PrivacyFirewall } from './firewall';
 import { useVaultStore } from '../../store/useVaultStore';
 
 export interface RouteInfo {
@@ -63,6 +63,37 @@ const sessionId = typeof window !== 'undefined'
   ? ((window as any).__privana_session_id || ((window as any).__privana_session_id = Math.random().toString(36).substring(2) + Date.now().toString(36)))
   : 'server-session';
 
+
+let isLocalAiKillSwitchActive = false;
+
+export function setLocalAiKillSwitch(active: boolean): void {
+  isLocalAiKillSwitchActive = active;
+  if (typeof window !== 'undefined') {
+    (window as any).__privana_kill_switch_active = active;
+  }
+}
+
+export function isKillSwitchActive(): boolean {
+  if (typeof window !== 'undefined' && (window as any).__privana_kill_switch_active !== undefined) {
+    return !!(window as any).__privana_kill_switch_active;
+  }
+  return isLocalAiKillSwitchActive;
+}
+
+if (typeof window !== 'undefined' && !(window as any).__privana_network_guard_installed) {
+  (window as any).__privana_network_guard_installed = true;
+  const originalFetch = window.fetch;
+  window.fetch = async function(input: RequestInfo | URL, init?: RequestInit) {
+    const urlStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input && input.url ? input.url : ''));
+    if (isKillSwitchActive()) {
+      if (urlStr.includes(':11434') || urlStr.includes(':1234') || urlStr.includes('/api/chat') || urlStr.includes('/v1/chat')) {
+        throw new Error('[PrivacyKillSwitch] Outbound AI call blocked by Local AI Kill Switch');
+      }
+    }
+    return originalFetch.apply(this, [input, init]);
+  };
+}
+
 export async function privacyFetch(url: string, options?: RequestInit): Promise<Response> {
   const store = useVaultStore.getState();
   const workspaceId = store.ws?.id || 1;
@@ -79,7 +110,6 @@ export async function privacyFetch(url: string, options?: RequestInit): Promise<
   try {
     route = parseRoute(url);
   } catch {
-    // Fail-closed on parsing errors
     await PrivacyFirewall.auditLocal({
       workspaceId,
       eventType: 'ALERT',
@@ -92,6 +122,36 @@ export async function privacyFetch(url: string, options?: RequestInit): Promise<
       bytesAuditSync: 0
     });
     return new Response('Blocked by Privacy Firewall: Malformed URL', { status: 400 });
+  }
+
+  // --- Local AI Kill Switch Physical Transport Interceptor ---
+  if (isKillSwitchActive()) {
+    const isAiTarget = 
+      url.includes(':11434') || 
+      url.includes(':1234') || 
+      url.includes('/api/chat') || 
+      url.includes('/api/generate') || 
+      url.includes('/v1/chat') ||
+      route.hostname.includes('ollama') ||
+      route.hostname.includes('openai');
+
+    if (isAiTarget) {
+      await PrivacyFirewall.auditLocal({
+        workspaceId,
+        eventType: 'BLOCK',
+        processName: 'privana:kill_switch',
+        messageLabel: 'BLOCK: Request dropped by active Local AI Kill Switch',
+        piiTypes: [],
+        sanitizedPayload: url,
+        bytesExternal: 0,
+        bytesLoopback: 0,
+        bytesAuditSync: 0
+      });
+      return new Response(JSON.stringify({ error: 'Request blocked by active Local AI Kill Switch' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
   }
 
   // --- Fetch Payload Pre-Sanitization ---

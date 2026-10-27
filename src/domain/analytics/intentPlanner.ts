@@ -143,10 +143,9 @@ export const IntentPlanner = {
       return { intent: 'comparison', confidence: 0.90 };
     }
 
-    // 4. Ranking
+    // 4. Ranking (Explicit ranking verbs take precedence over flat summary)
     if (
-      /\btop\s+\d+/.test(q) ||
-      /\bbottom\s+\d+/.test(q) ||
+      /\b(?:rank|ranking|ranked|top|bottom)\b/i.test(q) ||
       q.includes('highest') ||
       q.includes('lowest') ||
       q.includes('top 5') ||
@@ -154,7 +153,7 @@ export const IntentPlanner = {
     ) {
       // Check if it's actually grouped average or ranking
       if (q.includes('average') || q.includes('mean') || q.includes('avg')) {
-        if (/\btop[_\s]*\d+/.test(q) || /\bbottom[_\s]*\d+/.test(q) || q.includes('top 5') || q.includes('top 10')) {
+        if (/\b(?:top|bottom|rank|ranking)[_\s]*\d*/i.test(q) || q.includes('top 5') || q.includes('top 10')) {
           return { intent: 'ranking', confidence: 0.90 };
         }
         return { intent: 'grouped_average', confidence: 0.85 };
@@ -223,9 +222,9 @@ export const IntentPlanner = {
       q.includes('summary') ||
       q.includes('summarize') ||
       q.includes('overview') ||
-      /\bcount\b/.test(q) ||
+      (/\bcount\b/.test(q) && !q.includes('by ') && !q.includes('per ') && !q.includes('each ')) ||
       q.includes('how many') ||
-      /\btotal\b/.test(q)
+      (/\btotal\b/.test(q) && !q.includes('by ') && !q.includes('per ') && !q.includes('each ') && !/\brank\b/i.test(q))
     ) {
       return { intent: 'summary', confidence: 0.85 };
     }

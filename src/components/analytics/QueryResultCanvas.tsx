@@ -316,7 +316,7 @@ export default function QueryResultCanvas({
         Initializing Analytics Workspace...
       </h3>
       <p className="text-xs text-zinc-500 mt-1 font-mono">
-        {selectedDataset?.name ? `Loading ${selectedDataset.name} into SQLite engine` : 'Preparing localized data sandbox'}
+        {selectedDataset?.name ? `Loading ${selectedDataset.name} into DuckDB engine` : 'Preparing localized data sandbox'}
       </p>
     </div>
   );

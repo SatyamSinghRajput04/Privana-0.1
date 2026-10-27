@@ -1,4 +1,4 @@
-﻿// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/executors/correlation.ts
 // S8d CORRELATION EXECUTOR — Pure function for statistical correlation.
 //
@@ -24,7 +24,7 @@
 
 import { AnalysisPlan, ExecutorResult } from '../types';
 import { computeEngine } from '../../compute';
-import { BinaryEncoding, MomentsRequest } from '../../compute/ComputeEngine';
+import { BinaryEncoding, MomentsRequest, DataSource, ComputeEngine, PairProfile, PairMoments } from '../../compute/ComputeEngine';
 import {
   getSpearmanCorrelation,
   resolveBinaryMapping,
@@ -40,7 +40,8 @@ export const CorrelationExecutor = {
   /**
    * Computes Pearson, Spearman, or Point-Biserial correlation between plan.metric and plan.target.
    */
-  execute(plan: AnalysisPlan, rows: any[]): ExecutorResult {
+  execute(plan: AnalysisPlan, source: DataSource | any[], engine: ComputeEngine = computeEngine): any {
+    const rows = Array.isArray(source) ? source : (source && source.kind === 'in-memory-rows' ? source.rows : []);
     const metric = plan.metric;
     const target = plan.target;
 
@@ -50,7 +51,7 @@ export const CorrelationExecutor = {
 
     // One pass: how many complete pairs exist, are the columns numeric, and
     // (bounded) what distinct values do they hold.
-    const profile = computeEngine.profilePair(rows, metric, target);
+    const profile = engine.profilePair(source, metric, target) as PairProfile;
 
     if (profile.count < 3) {
       return { status: 'partial_missing', rows: [], metadata: { reason: 'At least 3 complete records are required.' } };
@@ -100,7 +101,10 @@ export const CorrelationExecutor = {
         rVal = getSpearmanCorrelation(xs, ys);
         method = 'Spearman';
       } else {
-        const m = computeEngine.moments(rows, statsRequest);
+        const m = (engine.moments(source, statsRequest) as PairMoments);
+        if (m instanceof Promise) {
+          throw new Error('Async moments should be handled via table pushdown in runAnalyticsQuestion');
+        }
         if (m.xAllIdentical || m.yAllIdentical) {
           return zeroVarianceResult(m.xAllIdentical ? metric : target, 'correlation');
         }
@@ -141,7 +145,7 @@ export const CorrelationExecutor = {
         pointsRequest = { xColumn: metric, yColumn: target, xEncoding: looseEncoding };
       }
 
-      const m = computeEngine.moments(rows, statsRequest);
+      const m = (computeEngine.moments(rows, statsRequest) as PairMoments);
 
       // Only the numeric side needs the guard: the categorical side is
       // already known to hold exactly 2 distinct values.
@@ -173,7 +177,7 @@ export const CorrelationExecutor = {
     // Statistics above used ALL complete pairs. The visual scatter is capped
     // at MAX_SCATTER_POINTS via reservoir sampling, so a rendering limit can
     // never degrade statistical correctness.
-    const points = computeEngine.samplePoints(rows, pointsRequest, MAX_SCATTER_POINTS);
+    const points = (engine.samplePoints(source, pointsRequest, MAX_SCATTER_POINTS) as any[]);
 
     return {
       status: profile.count < 5 ? 'partial_small_n' : 'success',

@@ -161,7 +161,18 @@ export const SchemaIntelligence = {
 
     const columns = profile.columns;
     const numericCols = columns.filter(c => c.type === 'numeric').map(c => c.name);
-    const catCols = columns.filter(c => c.type !== 'numeric' && c.name.toLowerCase() !== 'id').map(c => c.name);
+    const isAnalyzableDimension = (c: any) => {
+      if (c.type === 'numeric') return false;
+      if (c.role === 'id') return false;
+      const lower = (c.name || '').toLowerCase();
+      if (
+        lower === 'id' || lower === 'uuid' || lower.includes('guid') ||
+        lower.endsWith('_id') || lower.endsWith('_uuid') || lower.endsWith('_key') || lower.endsWith('_hash')
+      ) return false;
+      if (c.totalCount && c.uniqueCount && c.totalCount > 50 && (c.uniqueCount / c.totalCount) > 0.90) return false;
+      return true;
+    };
+    const catCols = columns.filter(isAnalyzableDimension).map(c => c.name);
 
     const suggestions: string[] = [];
 

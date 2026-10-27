@@ -355,7 +355,8 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
             provenance: buildProvenance(),
           };
       }
-    } catch (err) {
+    } catch (err: any) {
+      console.error('[runAnalyticsQuestion] Executor execution failed:', err?.message || err);
       return {
         status: 'blocked',
         reason: 'This file could not be analyzed as data. Please check the columns and data rows.',

@@ -188,8 +188,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
           AVG(TRY_CAST("${metric}" AS DOUBLE)) AS average_value,
           COUNT(*) AS count
         FROM ${table}
-        WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != ''
-          AND "${metric}" IS NOT NULL AND "${metric}" != ''
+        WHERE "${groupBy}" IS NOT NULL AND CAST("${groupBy}" AS VARCHAR) != ''
           AND TRY_CAST("${metric}" AS DOUBLE) IS NOT NULL
         GROUP BY "${groupBy}";
       `;
@@ -239,9 +238,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
       const originSql = `
         SELECT ${xExpr} AS x0, ${yExpr} AS y0
         FROM ${table}
-        WHERE "${request.xColumn}" IS NOT NULL AND "${request.xColumn}" != ''
-          AND "${request.yColumn}" IS NOT NULL AND "${request.yColumn}" != ''
-          AND ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL
+        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL
         LIMIT 1;
       `;
       const originRes = await conn.query(originSql);
@@ -268,9 +265,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
           MIN(${xExpr}) = MAX(${xExpr}) AS x_identical,
           MIN(${yExpr}) = MAX(${yExpr}) AS y_identical
         FROM ${table}
-        WHERE "${request.xColumn}" IS NOT NULL AND "${request.xColumn}" != ''
-          AND "${request.yColumn}" IS NOT NULL AND "${request.yColumn}" != ''
-          AND ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL;
+        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL;
       `;
 
       const mRes = await conn.query(momentsSql);
@@ -318,9 +313,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
       const sql = `
         SELECT ${xExpr} AS x, ${yExpr} AS y
         FROM ${table}
-        WHERE "${request.xColumn}" IS NOT NULL AND "${request.xColumn}" != ''
-          AND "${request.yColumn}" IS NOT NULL AND "${request.yColumn}" != ''
-          AND ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL
+        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL
         USING SAMPLE ${limit} (reservoir);
       `;
 
@@ -369,7 +362,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
           MAX(TRY_CAST("${column}" AS DOUBLE)) AS max_val,
           COUNT(DISTINCT "${column}") AS approx_distinct
         FROM ${table}
-        WHERE "${column}" IS NOT NULL AND "${column}" != '';
+        WHERE "${column}" IS NOT NULL AND CAST("${column}" AS VARCHAR) != '';
       `;
 
       const statsRes = await conn.query(statsSql);
@@ -425,8 +418,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
             END AS b_idx,
             COUNT(*) AS count
           FROM ${table}
-          WHERE "${column}" IS NOT NULL AND "${column}" != ''
-            AND TRY_CAST("${column}" AS DOUBLE) IS NOT NULL
+          WHERE TRY_CAST("${column}" AS DOUBLE) IS NOT NULL
           GROUP BY b_idx
           ORDER BY b_idx;
         `;
@@ -461,7 +453,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
             CAST("${column}" AS VARCHAR) AS cat_val,
             COUNT(*) AS count
           FROM ${table}
-          WHERE "${column}" IS NOT NULL AND "${column}" != ''
+          WHERE "${column}" IS NOT NULL AND CAST("${column}" AS VARCHAR) != ''
           GROUP BY 1
           ORDER BY count DESC
           LIMIT 50;
@@ -515,9 +507,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
             TRY_CAST("${xColumn}" AS DOUBLE) AS x,
             TRY_CAST("${yColumn}" AS DOUBLE) AS y
           FROM ${table}
-          WHERE "${xColumn}" IS NOT NULL AND "${xColumn}" != ''
-            AND "${yColumn}" IS NOT NULL AND "${yColumn}" != ''
-            AND TRY_CAST("${xColumn}" AS DOUBLE) IS NOT NULL
+          WHERE TRY_CAST("${xColumn}" AS DOUBLE) IS NOT NULL
             AND TRY_CAST("${yColumn}" AS DOUBLE) IS NOT NULL
         ),
         ranked AS (

@@ -19,7 +19,8 @@ import { DataSource, ComputeEngine,
   BinaryEncoding,
   DistributionBin,
   DistributionResult,
-  Aggregation } from '../ComputeEngine';
+  Aggregation,
+  MaybePromise } from '../ComputeEngine';
 import { inMemoryComputeEngine } from '../inMemoryComputeEngine';
 import { pearsonFromMoments } from '../../safeCompute/relationshipRanker';
 import { DUCKDB_TABLES } from '../../../lib/sqlEngine';
@@ -81,9 +82,24 @@ export class DuckDBComputeEngine implements ComputeEngine {
     xColumn: string,
     yColumn: string,
     distinctCap: number = 20
-  ): PairProfile {
+  ): MaybePromise<PairProfile> {
     const res = resolveSource(source);
+    if (res.isTable) {
+      return this.queryProfilePair(res.tableName, xColumn, yColumn, distinctCap);
+    }
     return inMemoryComputeEngine.profilePair(res.rows, xColumn, yColumn, distinctCap);
+  }
+
+  spearman(
+    source: DataSource | any[],
+    xColumn: string,
+    yColumn: string
+  ): MaybePromise<{ r: number; count: number; xAllIdentical?: boolean; yAllIdentical?: boolean }> {
+    const res = resolveSource(source);
+    if (res.isTable) {
+      return this.querySpearman(res.tableName, xColumn, yColumn);
+    }
+    return this.querySpearman(res.rows, xColumn, yColumn);
   }
 
   moments(
@@ -200,7 +216,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
           COUNT(CASE WHEN TRY_CAST("${metric}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${metric}" AS DOUBLE)) THEN 1 END)::BIGINT AS valid_count
         FROM ${table}
         WHERE "${groupBy}" IS NOT NULL AND CAST("${groupBy}" AS VARCHAR) != ''
-        GROUP BY 1;
+        GROUP BY "${groupBy}";
       `;
 
       const result = await conn.query(sql);
@@ -234,6 +250,88 @@ export class DuckDBComputeEngine implements ComputeEngine {
    * Single-pass Shifted Moments query pushdown.
    * Returns exactly 1 row (O(1) transfer) with condition-stabilized sums.
    */
+  /**
+   * Vectorized pairwise profile pushdown.
+   * Reports total rows, non-null counts, valid numeric pair counts, distinct counts
+   * and extracts distinct category values for binary mapping without materializing rows.
+   */
+  async queryProfilePair(
+    tableNameOrRows: string | any[],
+    xColumn: string,
+    yColumn: string,
+    distinctCap: number = 20
+  ): Promise<PairProfile> {
+    const conn = await getDuckDBConnection();
+    const isScratch = typeof tableNameOrRows !== 'string';
+    const scratchName = isScratch ? `_scratch_prof_${Date.now()}_${Math.random().toString(36).slice(2)}` : '';
+    const table = isScratch ? `"${scratchName}"` : `"${tableNameOrRows}"`;
+
+    if (isScratch) {
+      await registerMemoryTable(scratchName, tableNameOrRows);
+    }
+
+    try {
+      const sql = `
+        SELECT 
+          COUNT(*)::BIGINT AS total_rows,
+          COUNT("${xColumn}")::BIGINT AS x_non_null,
+          COUNT("${yColumn}")::BIGINT AS y_non_null,
+          COUNT(CASE WHEN TRY_CAST("${xColumn}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${xColumn}" AS DOUBLE)) THEN 1 END)::BIGINT AS x_valid_num,
+          COUNT(CASE WHEN TRY_CAST("${yColumn}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${yColumn}" AS DOUBLE)) THEN 1 END)::BIGINT AS y_valid_num,
+          COUNT(CASE 
+            WHEN TRY_CAST("${xColumn}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${xColumn}" AS DOUBLE))
+             AND TRY_CAST("${yColumn}" AS DOUBLE) IS NOT NULL
+            AND isfinite(TRY_CAST("${xColumn}" AS DOUBLE))
+            AND isfinite(TRY_CAST("${yColumn}" AS DOUBLE)) AND isfinite(TRY_CAST("${yColumn}" AS DOUBLE))
+            THEN 1 END)::BIGINT AS pair_valid_count,
+          COUNT(DISTINCT "${xColumn}")::BIGINT AS x_distinct,
+          COUNT(DISTINCT "${yColumn}")::BIGINT AS y_distinct
+        FROM ${table};
+      `;
+
+      const res = await conn.query(sql);
+      const totalRows = Number(res.getChild('total_rows')?.get(0) ?? 0);
+      const xNonNull = Number(res.getChild('x_non_null')?.get(0) ?? 0);
+      const yNonNull = Number(res.getChild('y_non_null')?.get(0) ?? 0);
+      const xValidNum = Number(res.getChild('x_valid_num')?.get(0) ?? 0);
+      const yValidNum = Number(res.getChild('y_valid_num')?.get(0) ?? 0);
+      const pairValid = Number(res.getChild('pair_valid_count')?.get(0) ?? 0);
+      const xDistinct = Number(res.getChild('x_distinct')?.get(0) ?? 0);
+      const yDistinct = Number(res.getChild('y_distinct')?.get(0) ?? 0);
+
+      const xVals: any[] = [];
+      const yVals: any[] = [];
+      if (xDistinct <= distinctCap && xDistinct > 0) {
+        const xDistRes = await conn.query(`SELECT DISTINCT "${xColumn}" AS val FROM ${table} WHERE "${xColumn}" IS NOT NULL LIMIT ${distinctCap};`);
+        for (let i = 0; i < xDistRes.numRows; i++) xVals.push(xDistRes.getChild('val')?.get(i));
+      }
+      if (yDistinct <= distinctCap && yDistinct > 0) {
+        const yDistRes = await conn.query(`SELECT DISTINCT "${yColumn}" AS val FROM ${table} WHERE "${yColumn}" IS NOT NULL LIMIT ${distinctCap};`);
+        for (let i = 0; i < yDistRes.numRows; i++) yVals.push(yDistRes.getChild('val')?.get(i));
+      }
+
+      return {
+        count: pairValid,
+        totalRows,
+        xNonNullCount: xNonNull,
+        yNonNullCount: yNonNull,
+        pairValidCount: pairValid,
+        xAllNumeric: xNonNull > 0 && xValidNum === xNonNull,
+        yAllNumeric: yNonNull > 0 && yValidNum === yNonNull,
+        xDistinct: xVals,
+        yDistinct: yVals,
+        xDistinctCount: xDistinct,
+        yDistinctCount: yDistinct,
+        xDistinctTruncated: xDistinct > distinctCap,
+        yDistinctTruncated: yDistinct > distinctCap
+      };
+    } finally {
+      if (isScratch) {
+        try { await conn.query(`DROP TABLE IF EXISTS "${scratchName}";`); } catch {}
+      }
+    }
+  }
+
   async queryMoments(
     tableNameOrRows: string | any[],
     request: MomentsRequest
@@ -255,7 +353,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
       const originSql = `
         SELECT ${xExpr} AS x0, ${yExpr} AS y0
         FROM ${table}
-        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL
+        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL AND isfinite(${xExpr}) AND isfinite(${yExpr})
         LIMIT 1;
       `;
       const originRes = await conn.query(originSql);
@@ -282,7 +380,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
           MIN(${xExpr}) = MAX(${xExpr}) AS x_identical,
           MIN(${yExpr}) = MAX(${yExpr}) AS y_identical
         FROM ${table}
-        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL;
+        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL AND isfinite(${xExpr}) AND isfinite(${yExpr});
       `;
 
       const mRes = await conn.query(momentsSql);
@@ -330,7 +428,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
       const sql = `
         SELECT ${xExpr} AS x, ${yExpr} AS y
         FROM ${table}
-        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL
+        WHERE ${xExpr} IS NOT NULL AND ${yExpr} IS NOT NULL AND isfinite(${xExpr}) AND isfinite(${yExpr})
         USING SAMPLE ${limit} (reservoir);
       `;
 
@@ -550,6 +648,8 @@ export class DuckDBComputeEngine implements ComputeEngine {
           FROM ${table}
           WHERE TRY_CAST("${xColumn}" AS DOUBLE) IS NOT NULL
             AND TRY_CAST("${yColumn}" AS DOUBLE) IS NOT NULL
+            AND isfinite(TRY_CAST("${xColumn}" AS DOUBLE))
+            AND isfinite(TRY_CAST("${yColumn}" AS DOUBLE))
         ),
         ranked AS (
           SELECT 

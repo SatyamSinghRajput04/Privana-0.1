@@ -118,10 +118,18 @@ export const inMemoryComputeEngine: ComputeEngine = {
     });
   },
 
-  profilePair(source: DataSource | any[], xColumn: string, yColumn: string, distinctCap = 3): PairProfile {
+  profilePair(source: DataSource | any[], xColumn: string, yColumn: string, distinctCap = 20): PairProfile {
     const rows = extractRows(source);
     const profile: PairProfile = {
+
       count: 0,
+      totalRows: rows?.length || 0,
+      xNonNullCount: 0,
+      yNonNullCount: 0,
+      pairValidCount: 0,
+      xDistinctCount: 0,
+      yDistinctCount: 0,
+
       xAllNumeric: true,
       yAllNumeric: true,
       xDistinct: [],
@@ -136,6 +144,12 @@ export const inMemoryComputeEngine: ComputeEngine = {
     // depends on.
     const xSeen = new Set<any>();
     const ySeen = new Set<any>();
+    const xAllSet = new Set<any>();
+    const yAllSet = new Set<any>();
+    for (const r of rows) {
+      if (isPresent(r[xColumn])) { profile.xNonNullCount!++; xAllSet.add(r[xColumn]); }
+      if (isPresent(r[yColumn])) { profile.yNonNullCount!++; yAllSet.add(r[yColumn]); }
+    }
 
     for (const r of rows) {
       const xRaw = r[xColumn];
@@ -143,6 +157,7 @@ export const inMemoryComputeEngine: ComputeEngine = {
       if (!isPresent(xRaw) || !isPresent(yRaw)) continue;
 
       profile.count++;
+      profile.pairValidCount = profile.count;
 
       if (profile.xAllNumeric && isNaN(Number(xRaw))) profile.xAllNumeric = false;
       if (profile.yAllNumeric && isNaN(Number(yRaw))) profile.yAllNumeric = false;
@@ -165,12 +180,15 @@ export const inMemoryComputeEngine: ComputeEngine = {
       }
     }
 
+    profile.xDistinctCount = xAllSet.size;
+    profile.yDistinctCount = yAllSet.size;
     return profile;
   },
 
   moments(source: DataSource | any[], request: MomentsRequest): PairMoments {
     const rows = extractRows(source);
     const m: PairMoments = {
+
       count: 0,
       shiftX: 0,
       shiftY: 0,

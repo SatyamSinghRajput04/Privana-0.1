@@ -1,4 +1,4 @@
-﻿// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/runAnalyticsQuestion.ts
 // S9 ORCHESTRATOR — Main pipeline planning, validation, execution & narative compiler.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -381,7 +381,9 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       console.error('[runAnalyticsQuestion] Executor execution failed:', err?.message || err);
       return {
         status: 'blocked',
-        reason: 'This file could not be analyzed as data. Please check the columns and data rows.',
+        reason: err?.message && (err.message.includes('DuckDB') || err.message.includes('Catalog') || err.message.includes('Binder'))
+          ? `Query execution failed: ${err.message}`
+          : (err?.message || 'This file could not be analyzed as data. Please check the columns and data rows.'),
         provenance: buildProvenance(),
       };
     }

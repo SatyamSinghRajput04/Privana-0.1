@@ -1,4 +1,4 @@
-﻿// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/slotResolver.ts
 // S7 SLOT RESOLVER — Extract metric, groupBy, filters, and target (Layer 2).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +101,14 @@ export const SlotResolver = {
     } else if (intent === 'grouped_average' || intent === 'comparison') {
       // Grouped average/comparison needs a metric (numeric) and a groupBy (categorical)
       const numeric = availableCols.find(c => c.role === 'metric');
-      const categorical = availableCols.find(c => c.role === 'groupBy');
+      let categorical = availableCols.find(c => c.role === 'groupBy');
+      if (!categorical) {
+        categorical = availableCols.find(c => {
+          const cp = profile.columns?.find(p => p.name.toLowerCase() === c.columnName.toLowerCase());
+          const card = cp?.cardinality ?? (cp?.uniqueValues?.length || 0);
+          return card > 0 && card <= 50;
+        });
+      }
 
       if (numeric) {
         result.metric = numeric.columnName;
@@ -112,7 +119,14 @@ export const SlotResolver = {
     } else if (intent === 'ranking') {
       // Ranking needs a metric and a group
       const numeric = availableCols.find(c => c.role === 'metric');
-      const categorical = availableCols.find(c => c.role === 'groupBy');
+      let categorical = availableCols.find(c => c.role === 'groupBy');
+      if (!categorical) {
+        categorical = availableCols.find(c => {
+          const cp = profile.columns?.find(p => p.name.toLowerCase() === c.columnName.toLowerCase());
+          const card = cp?.cardinality ?? (cp?.uniqueValues?.length || 0);
+          return card > 0 && card <= 50;
+        });
+      }
 
       if (numeric) result.metric = numeric.columnName;
       if (categorical) result.groupBy = [categorical.columnName];

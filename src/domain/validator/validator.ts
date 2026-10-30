@@ -1,4 +1,4 @@
-﻿import { DatasetProfile, ColumnProfile, QualityMetrics, PiiFlag } from '../types/dataset';
+import { DatasetProfile, ColumnProfile, QualityMetrics, PiiFlag } from '../types/dataset';
 
 /**
  * Generate a simple hash from string content for cache keys
@@ -218,7 +218,8 @@ export const DatasetValidator = {
         name: colName,
         type: inferredType,
         nullPct: parseFloat(nullPct.toFixed(2)),
-        uniqueValues: Array.from(uniqueValuesSet).slice(0, 20) // cache sample unique values
+        uniqueValues: Array.from(uniqueValuesSet).slice(0, 20),
+        cardinality: uniqueValuesSet.size
       });
     });
 

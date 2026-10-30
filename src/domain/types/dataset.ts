@@ -1,8 +1,9 @@
-﻿export type ColumnProfile = {
+export type ColumnProfile = {
   name: string;
   type: 'numeric' | 'category' | 'date' | 'text' | 'boolean' | 'identifier';
   nullPct: number;
   uniqueValues?: any[];
+  cardinality?: number;
 };
 
 export type QualityMetrics = {

@@ -2,29 +2,13 @@
 // src/domain/analytics/executors/correlation.ts
 // S8d CORRELATION EXECUTOR — Pure function for statistical correlation.
 //
-// Stage 2.5 migration: data access now goes through the ComputeEngine as
-// three single-pass operations (profilePair → moments → samplePoints)
-// instead of materializing five ~N-length arrays (filter + 2 value maps +
-// 2 Number maps) and walking them ~8 times.
-//
-// The split of responsibility is deliberate:
-//   ComputeEngine  — supplies counts, sufficient statistics, sample points.
-//                    Knows nothing about correlation.
-//   This executor  — chooses the method, applies the zero-variance guard,
-//                    and calls the statistics layer for the actual formula.
-//   Statistics     — pearsonFromMoments / testCorrelationSignificance /
-//                    resolveBinaryMapping. Written and tested once, shared
-//                    by every engine implementation.
-//
-// Spearman deliberately still materializes arrays: rank transformation
-// requires sorting every value, which cannot be expressed as running sums,
-// so there are no sufficient statistics for the engine to return. It is the
-// one path where the array boundary is intrinsic rather than incidental.
+// Dual-engine supported: runs synchronously for in-memory row arrays and
+// asynchronously (vectorized pushdown) for DuckDB tables.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AnalysisPlan, ExecutorResult } from '../types';
 import { computeEngine } from '../../compute';
-import { BinaryEncoding, MomentsRequest, DataSource, ComputeEngine, PairProfile, PairMoments } from '../../compute/ComputeEngine';
+import { BinaryEncoding, MomentsRequest, DataSource, ComputeEngine, PairProfile, PairMoments, MaybePromise } from '../../compute/ComputeEngine';
 import {
   getSpearmanCorrelation,
   resolveBinaryMapping,
@@ -40,160 +24,172 @@ export const CorrelationExecutor = {
   /**
    * Computes Pearson, Spearman, or Point-Biserial correlation between plan.metric and plan.target.
    */
-  execute(plan: AnalysisPlan, source: DataSource | any[], engine: ComputeEngine = computeEngine): any {
-    const rows = Array.isArray(source) ? source : (source && source.kind === 'in-memory-rows' ? source.rows : []);
+  execute(plan: AnalysisPlan, source: DataSource | any[], engine: ComputeEngine = computeEngine): MaybePromise<ExecutorResult> {
     const metric = plan.metric;
     const target = plan.target;
 
-    if (!metric || !target || !rows || rows.length === 0) {
+    if (!metric || !target || !source) {
+      return { status: 'partial_missing', rows: [] };
+    }
+    if (Array.isArray(source) && source.length === 0) {
       return { status: 'partial_missing', rows: [] };
     }
 
-    // One pass: how many complete pairs exist, are the columns numeric, and
-    // (bounded) what distinct values do they hold.
-    const profile = engine.profilePair(source, metric, target) as PairProfile;
+    const profOrPromise = engine.profilePair(source, metric, target);
 
-    if (profile.count < 3) {
-      return { status: 'partial_missing', rows: [], metadata: { reason: 'At least 3 complete records are required.' } };
-    }
-
-    const isMetricNumeric = profile.xAllNumeric;
-    const isTargetNumeric = profile.yAllNumeric;
-
-    let rVal = 0;
-    let method = 'Pearson';
-    let pVal = 1.0;
-    const warnings: string[] = [];
-
-    // Encodings for the eventual moments/samplePoints requests. Left
-    // undefined for numeric columns; set only for the categorical side of a
-    // Point-Biserial pair, from the deterministically resolved mapping.
-    let statsRequest: MomentsRequest = { xColumn: metric, yColumn: target };
-    let pointsRequest: MomentsRequest = { xColumn: metric, yColumn: target };
-
-    if (isMetricNumeric && isTargetNumeric) {
-      // Check the original question text for Spearman request (planId is auto-generated and never contains 'spearman')
-      const originalQ = ((plan as any)._originalQuestion || '').toLowerCase();
-      const useSpearman = originalQ.includes('spearman') || (plan as any).source === 'spearman';
-
-      if (useSpearman) {
-        // Rank-based: intrinsically needs materialized, sortable arrays.
-        const xs: number[] = [];
-        const ys: number[] = [];
-        for (const r of rows) {
-          const xRaw = r[metric];
-          const yRaw = r[target];
-          if (xRaw === null || xRaw === undefined || xRaw === '') continue;
-          if (yRaw === null || yRaw === undefined || yRaw === '') continue;
-          xs.push(Number(xRaw));
-          ys.push(Number(yRaw));
-        }
-
-        // Zero variance makes correlation mathematically undefined — report
-        // that plainly instead of a misleading r=0 ("no correlation") that a
-        // user cannot tell apart from a genuinely weak relationship.
-        const xConstant = xs.every(v => v === xs[0]);
-        const yConstant = ys.every(v => v === ys[0]);
-        if (xConstant || yConstant) {
-          return zeroVarianceResult(xConstant ? metric : target, 'correlation');
-        }
-
-        rVal = getSpearmanCorrelation(xs, ys);
-        method = 'Spearman';
-      } else {
-        const m = (engine.moments(source, statsRequest) as PairMoments);
-        if (m instanceof Promise) {
-          throw new Error('Async moments should be handled via table pushdown in runAnalyticsQuestion');
-        }
-        if (m.xAllIdentical || m.yAllIdentical) {
-          return zeroVarianceResult(m.xAllIdentical ? metric : target, 'correlation');
-        }
-        rVal = pearsonFromMoments(m);
-        method = 'Pearson';
+    const evaluateWithProfile = (profile: PairProfile): MaybePromise<ExecutorResult> => {
+      if (!profile || profile.count < 3) {
+        return { status: 'partial_missing', rows: [], metadata: { reason: 'At least 3 complete records are required.' } };
       }
 
-      const sig = testCorrelationSignificance(rVal, profile.count);
-      pVal = sig.p;
-    } else if (isMetricNumeric || isTargetNumeric) {
-      // One numeric, one categorical. Point-Biserial requires the
-      // categorical side to be binary.
-      const catDistinct = isMetricNumeric ? profile.yDistinct : profile.xDistinct;
-      const catTruncated = isMetricNumeric ? profile.yDistinctTruncated : profile.xDistinctTruncated;
+      if ((profile.xDistinctCount !== undefined && profile.xDistinctCount <= 1) ||
+          (profile.yDistinctCount !== undefined && profile.yDistinctCount <= 1)) {
+        return zeroVarianceResult((profile.xDistinctCount ?? 0) <= 1 ? metric : target, 'correlation');
+      }
 
-      if (catDistinct.length !== 2 || catTruncated) {
+      const isMetricNumeric = profile.xAllNumeric;
+      const isTargetNumeric = profile.yAllNumeric;
+
+      let rVal = 0;
+      let method = 'Pearson';
+      let pVal = 1.0;
+      const warnings: string[] = [];
+
+      let statsRequest: MomentsRequest = { xColumn: metric, yColumn: target };
+      let pointsRequest: MomentsRequest = { xColumn: metric, yColumn: target };
+
+      if (isMetricNumeric && isTargetNumeric) {
+        const originalQ = ((plan as any)._originalQuestion || '').toLowerCase();
+        const useSpearman = originalQ.includes('spearman') || (plan as any).source === 'spearman';
+
+        if (useSpearman) {
+          if (engine.spearman) {
+            const spOrPromise = engine.spearman(source, metric, target);
+            const processSpearman = (sp: { r: number; count: number; xAllIdentical?: boolean; yAllIdentical?: boolean }): ExecutorResult => {
+              if (sp.xAllIdentical || sp.yAllIdentical) {
+                return zeroVarianceResult(sp.xAllIdentical ? metric : target, 'correlation');
+              }
+              const sig = testCorrelationSignificance(sp.r, profile.count);
+              return {
+                status: profile.count < 5 ? 'partial_small_n' : 'success',
+                rows: [{ r: sp.r, pValue: sig.p, method: 'Spearman', sampleSize: profile.count, points: [] }],
+                metadata: { metric, target, warnings }
+              };
+            };
+            return spOrPromise instanceof Promise ? spOrPromise.then(processSpearman) : processSpearman(spOrPromise);
+          } else {
+            const rows = Array.isArray(source) ? source : (source && source.kind === 'in-memory-rows' ? source.rows : []);
+            const xs: number[] = [];
+            const ys: number[] = [];
+            for (const r of rows) {
+              const xRaw = r[metric];
+              const yRaw = r[target];
+              if (xRaw === null || xRaw === undefined || xRaw === '') continue;
+              if (yRaw === null || yRaw === undefined || yRaw === '') continue;
+              xs.push(Number(xRaw));
+              ys.push(Number(yRaw));
+            }
+            const xConstant = xs.every(v => v === xs[0]);
+            const yConstant = ys.every(v => v === ys[0]);
+            if (xConstant || yConstant) {
+              return zeroVarianceResult(xConstant ? metric : target, 'correlation');
+            }
+            rVal = getSpearmanCorrelation(xs, ys);
+            method = 'Spearman';
+            const sig = testCorrelationSignificance(rVal, profile.count);
+            pVal = sig.p;
+          }
+        }
+      } else if (isMetricNumeric || isTargetNumeric) {
+        const catDistinct = isMetricNumeric ? profile.yDistinct : profile.xDistinct;
+        const catTruncated = isMetricNumeric ? profile.yDistinctTruncated : profile.xDistinctTruncated;
+
+        if (catDistinct.length !== 2 || catTruncated) {
+          return {
+            status: 'partial_missing',
+            rows: [],
+            metadata: {
+              reason: `Correlation is only supported between two numeric columns, or one numeric and one binary column. Column has ${catTruncated ? 'more than 2' : catDistinct.length} unique values.`
+            }
+          };
+        }
+
+        const binaryMapping = resolveBinaryMapping(catDistinct);
+        const strictEncoding: BinaryEncoding = { positiveValue: binaryMapping.posValue, matchMode: 'strict' };
+        const looseEncoding: BinaryEncoding = { positiveValue: binaryMapping.posValue, matchMode: 'loose' };
+
+        if (isMetricNumeric) {
+          statsRequest = { xColumn: metric, yColumn: target, yEncoding: strictEncoding };
+          pointsRequest = { xColumn: metric, yColumn: target, yEncoding: looseEncoding };
+        } else {
+          statsRequest = { xColumn: metric, yColumn: target, xEncoding: strictEncoding };
+          pointsRequest = { xColumn: metric, yColumn: target, xEncoding: looseEncoding };
+        }
+        method = 'Point-Biserial';
+        if (binaryMapping.isAmbiguous) {
+          warnings.push(binaryMapping.mappingNote || 'Point-biserial mapping is ambiguous.');
+        }
+      } else {
         return {
           status: 'partial_missing',
           rows: [],
-          metadata: {
-            reason: `Correlation is only supported between two numeric columns, or one numeric and one binary column. Column has ${catTruncated ? 'more than 2' : catDistinct.length} unique values.`
-          }
+          metadata: { reason: 'Correlation requires at least one numeric column.' }
         };
       }
 
-      // The resolved mapping is the single source of truth for which value
-      // means 1 — the engine never guesses how to turn a category into a
-      // number, it is told explicitly.
-      const binaryMapping = resolveBinaryMapping(catDistinct);
-      const strictEncoding: BinaryEncoding = { positiveValue: binaryMapping.posValue, matchMode: 'strict' };
-      const looseEncoding: BinaryEncoding = { positiveValue: binaryMapping.posValue, matchMode: 'loose' };
+      // Compute moments & sample points (sync or async)
+      const momentsOrPromise = engine.moments(source, statsRequest);
+      const pointsOrPromise = engine.samplePoints(source, pointsRequest, MAX_SCATTER_POINTS);
 
-      if (isMetricNumeric) {
-        statsRequest = { xColumn: metric, yColumn: target, yEncoding: strictEncoding };
-        pointsRequest = { xColumn: metric, yColumn: target, yEncoding: looseEncoding };
-      } else {
-        statsRequest = { xColumn: metric, yColumn: target, xEncoding: strictEncoding };
-        pointsRequest = { xColumn: metric, yColumn: target, xEncoding: looseEncoding };
-      }
+      const assembleFinalResult = (m: PairMoments, points: any[]): ExecutorResult => {
+        if (method !== 'Spearman') {
+          const isConstant = method === 'Point-Biserial'
+            ? (isMetricNumeric ? m.xAllIdentical : m.yAllIdentical)
+            : (m.xAllIdentical || m.yAllIdentical);
 
-      const m = (computeEngine.moments(rows, statsRequest) as PairMoments);
+          if (isConstant) {
+            const constCol = (isMetricNumeric && method === 'Point-Biserial') ? metric : (m.xAllIdentical ? metric : target);
+            return zeroVarianceResult(constCol, method === 'Point-Biserial' ? 'Point-Biserial correlation' : 'correlation');
+          }
 
-      // Only the numeric side needs the guard: the categorical side is
-      // already known to hold exactly 2 distinct values.
-      const numericSideConstant = isMetricNumeric ? m.xAllIdentical : m.yAllIdentical;
-      if (numericSideConstant) {
-        return zeroVarianceResult(isMetricNumeric ? metric : target, 'Point-Biserial correlation');
-      }
-
-      rVal = pearsonFromMoments(m);
-      method = 'Point-Biserial';
-
-      const sig = testCorrelationSignificance(rVal, profile.count);
-      pVal = sig.p;
-
-      if (binaryMapping.isAmbiguous) {
-        warnings.push(binaryMapping.mappingNote || 'Point-biserial mapping is ambiguous.');
-      }
-    } else {
-      return {
-        status: 'partial_missing',
-        rows: [],
-        metadata: {
-          reason: 'Correlation requires at least one numeric column.'
+          rVal = pearsonFromMoments(m);
+          const sig = testCorrelationSignificance(rVal, profile.count);
+          pVal = sig.p;
         }
+
+        return {
+          status: profile.count < 5 ? 'partial_small_n' : 'success',
+          rows: [{
+            r: rVal,
+            pValue: pVal,
+            method,
+            sampleSize: profile.count,
+            points: points || [],
+          }],
+          metadata: {
+            metric,
+            target,
+            warnings,
+            pairValidCount: profile.count,
+            totalRows: profile.totalRows
+          }
+        };
       };
-    }
 
-    // ── Scatter overlay (downsampled for DOM safety) ─────────────────────
-    // Statistics above used ALL complete pairs. The visual scatter is capped
-    // at MAX_SCATTER_POINTS via reservoir sampling, so a rendering limit can
-    // never degrade statistical correctness.
-    const points = (engine.samplePoints(source, pointsRequest, MAX_SCATTER_POINTS) as any[]);
-
-    return {
-      status: profile.count < 5 ? 'partial_small_n' : 'success',
-      rows: [{
-        r: rVal,
-        pValue: pVal,
-        method,
-        sampleSize: profile.count,
-        points,
-      }],
-      metadata: {
-        metric,
-        target,
-        warnings,
+      if (momentsOrPromise instanceof Promise || pointsOrPromise instanceof Promise) {
+        return Promise.all([
+          Promise.resolve(momentsOrPromise),
+          Promise.resolve(pointsOrPromise)
+        ]).then(([m, pts]) => assembleFinalResult(m, pts));
       }
+
+      return assembleFinalResult(momentsOrPromise as PairMoments, pointsOrPromise as any[]);
     };
+
+    if (profOrPromise instanceof Promise) {
+      return profOrPromise.then(evaluateWithProfile);
+    }
+    return evaluateWithProfile(profOrPromise);
   }
 };
 

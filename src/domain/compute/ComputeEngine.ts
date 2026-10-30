@@ -106,6 +106,12 @@ export interface PairProfile {
    * 2 distinct" from "more than 2"; first-seen order is preserved because
    * binary-mapping resolution is order-sensitive).
    */
+  totalRows?: number;
+  xNonNullCount?: number;
+  yNonNullCount?: number;
+  pairValidCount?: number;
+  xDistinctCount?: number;
+  yDistinctCount?: number;
   xDistinct: any[];
   yDistinct: any[];
   /** True if the distinct list was truncated by the cap. */
@@ -196,7 +202,13 @@ export interface ComputeEngine {
     xColumn: string,
     yColumn: string,
     distinctCap?: number
-  ): PairProfile;
+  ): MaybePromise<PairProfile>;
+
+  spearman?(
+    source: DataSource | any[],
+    xColumn: string,
+    yColumn: string
+  ): MaybePromise<{ r: number; count: number; xAllIdentical?: boolean; yAllIdentical?: boolean }>;
 
   /**
    * One-pass accumulation of pairwise sufficient statistics. Rows where

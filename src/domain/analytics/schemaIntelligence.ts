@@ -1,4 +1,4 @@
-﻿// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/schemaIntelligence.ts
 // S4 SCHEMA INTELLIGENCE — Alias map, role inference, and question suggestions.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +67,9 @@ export const SchemaIntelligence = {
     const colName = match.columnName.toLowerCase();
 
     if (colName === 'id' || colName.endsWith('_id') || colName === 'uid') {
-      role = 'id';
+      const colProf = profile?.columns?.find(c => c.name.toLowerCase() === colName);
+      const card = colProf?.cardinality ?? (colProf?.uniqueValues?.length || 0);
+      role = (card > 0 && card <= 50) ? 'groupBy' : 'id';
     } else if (colName === 'date' || colName === 'timestamp' || colName === 'time' || colName === 'year') {
       role = 'time';
     } else if (match.type === 'numeric') {
@@ -117,6 +119,11 @@ export const SchemaIntelligence = {
     const colName = columnName.toLowerCase();
     
     if (colName === 'id' || colName.endsWith('_id') || colName === 'uid') {
+      const colProf = profile?.columns?.find(c => c.name.toLowerCase() === colName);
+      const card = colProf?.cardinality ?? (colProf?.uniqueValues?.length || 0);
+      if (card > 0 && card <= 50) {
+        return (intent === 'grouped_average' || intent === 'ranking' || intent === 'comparison') ? 'groupBy' : 'id';
+      }
       return 'id';
     }
     if (colName === 'date' || colName === 'timestamp' || colName === 'time' || colName === 'year') {

@@ -37,7 +37,8 @@ import {
   MomentsRequest,
   BinaryEncoding,
   DistributionBin,
-  DistributionResult
+  DistributionResult,
+  Aggregation
 } from './ComputeEngine';
 
 /** Shared data-validity rule: a pair row counts only if BOTH sides are present. */
@@ -74,28 +75,47 @@ function extractRows(source: DataSource | any[]): any[] {
 }
 
 export const inMemoryComputeEngine: ComputeEngine = {
-  groupedAggregate(source: DataSource | any[], metric: string, groupBy: string): GroupedAggregateRow[] {
+  groupedAggregate(source: DataSource | any[], metric: string, groupBy: string, aggregation?: Aggregation): GroupedAggregateRow[] {
     const rows = extractRows(source);
     if (!rows || rows.length === 0) return [];
 
-    const groups: Record<string, { sum: number; count: number }> = {};
+    const groups: Record<string, { sum: number; count: number; validCount: number; min: number; max: number }> = {};
     for (const r of rows) {
       const gVal = r[groupBy];
-      const rawM = r[metric];
-      if (gVal === null || gVal === undefined || gVal === '' || rawM === null || rawM === undefined || rawM === '') continue;
-      const mVal = Number(rawM);
-      if (isNaN(mVal)) continue;
+      if (gVal === null || gVal === undefined || gVal === '') continue;
       const key = String(gVal);
-      if (!groups[key]) groups[key] = { sum: 0, count: 0 };
-      groups[key].sum += mVal;
+      if (!groups[key]) groups[key] = { sum: 0, count: 0, validCount: 0, min: Infinity, max: -Infinity };
       groups[key].count++;
+
+      const rawM = r[metric];
+      if (rawM === null || rawM === undefined || rawM === '') continue;
+      const mVal = Number(rawM);
+      if (isNaN(mVal) || !isFinite(mVal)) continue;
+
+      groups[key].validCount++;
+      groups[key].sum += mVal;
+      if (mVal < groups[key].min) groups[key].min = mVal;
+      if (mVal > groups[key].max) groups[key].max = mVal;
     }
 
-    return Object.entries(groups).map(([groupVal, stats]) => ({
-      category_label: groupVal,
-      average_value: stats.sum / stats.count,
-      count: stats.count
-    }));
+    return Object.entries(groups).map(([groupVal, stats]) => {
+      const valid = stats.validCount;
+      const avg = valid > 0 ? stats.sum / valid : 0;
+      let agg = avg;
+      if (aggregation === 'SUM') agg = stats.sum;
+      else if (aggregation === 'COUNT') agg = valid;
+      else if (aggregation === 'MIN') agg = valid > 0 ? stats.min : 0;
+      else if (aggregation === 'MAX') agg = valid > 0 ? stats.max : 0;
+
+      return {
+        category_label: groupVal,
+        aggregate_value: agg,
+        average_value: avg,
+        record_count: stats.count,
+        valid_count: valid,
+        count: valid
+      };
+    });
   },
 
   profilePair(source: DataSource | any[], xColumn: string, yColumn: string, distinctCap = 3): PairProfile {
@@ -238,13 +258,13 @@ export const inMemoryComputeEngine: ComputeEngine = {
   distribution(source: DataSource | any[], column: string): DistributionResult {
     const rows = extractRows(source);
     if (!rows || rows.length === 0 || !column) {
-      return { isNumeric: false, rows: [], totalCount: 0 };
+      return { isNumeric: false, rows: [], totalCount: 0, excludedCount: 0 };
     }
 
     const numericVals: number[] = [];
     const categoricalCounts: Record<string, number> = {};
+    const distinctSet = new Set<any>();
     let presentCount = 0;
-    let hasNonInteger = false;
     let min = Infinity;
     let max = -Infinity;
 
@@ -252,13 +272,13 @@ export const inMemoryComputeEngine: ComputeEngine = {
       const v = rows[i][column];
       if (v === null || v === undefined || v === '') continue;
       presentCount++;
+      distinctSet.add(v);
 
       const numV = Number(v);
-      if (!isNaN(numV) && typeof v !== 'boolean') {
+      if (!isNaN(numV) && isFinite(numV) && typeof v !== 'boolean') {
         numericVals.push(numV);
         if (numV < min) min = numV;
         if (numV > max) max = numV;
-        if (!Number.isInteger(numV)) hasNonInteger = true;
       } else {
         const s = String(v);
         categoricalCounts[s] = (categoricalCounts[s] || 0) + 1;
@@ -266,92 +286,100 @@ export const inMemoryComputeEngine: ComputeEngine = {
     }
 
     if (presentCount === 0) {
-      return { isNumeric: false, rows: [], totalCount: 0 };
+      return { isNumeric: false, rows: [], totalCount: 0, excludedCount: 0 };
     }
 
-    let uniqueNumericSize = 0;
-    if (hasNonInteger) {
-      uniqueNumericSize = 11;
-    } else {
-      const tempSet = new Set<number>();
-      for (let i = 0; i < numericVals.length; i++) {
-        tempSet.add(numericVals[i]);
-        if (tempSet.size > 10) {
-          uniqueNumericSize = 11;
-          break;
-        }
-      }
-      uniqueNumericSize = tempSet.size;
-    }
-
-    const isNumeric = numericVals.length > 0 &&
-                      (numericVals.length / presentCount) > 0.8 &&
-                      (uniqueNumericSize > 10 || hasNonInteger);
-
-    const distributionRows: DistributionBin[] = [];
+    const excludedCount = presentCount - numericVals.length;
+    const isNumeric = numericVals.length > 0 && (numericVals.length / presentCount) > 0.8;
+    const distinctCount = distinctSet.size;
 
     if (isNumeric) {
-      const range = max - min;
-      if (range === 0) {
-        distributionRows.push({
-          binRange: `${min}`,
-          binLabel: `${min}`,
-          count: numericVals.length,
-          minVal: min,
-          maxVal: max,
-        });
-      } else {
-        const binCount = Math.ceil(Math.log2(numericVals.length) + 1);
-        const binWidth = range / binCount;
-        const counts = new Array(binCount).fill(0);
-
-        for (let i = 0; i < numericVals.length; i++) {
-          const v = numericVals[i];
-          let binIndex = Math.floor((v - min) / binWidth);
-          if (binIndex >= binCount) binIndex = binCount - 1;
-          if (binIndex < 0) binIndex = 0;
-          counts[binIndex]++;
+      // Discrete frequency branch: D <= 5 (one bucket per distinct value with exact labels)
+      if (distinctCount <= 5 && distinctCount > 0) {
+        const valueCounts = new Map<number, number>();
+        for (const num of numericVals) {
+          valueCounts.set(num, (valueCounts.get(num) || 0) + 1);
         }
-
-        for (let i = 0; i < binCount; i++) {
-          const start = min + i * binWidth;
-          const end = (i === binCount - 1) ? max : start + binWidth;
-          const label = `${start.toFixed(1)} - ${end.toFixed(1)}`;
-          distributionRows.push({
+        const sortedVals = Array.from(valueCounts.keys()).sort((a, b) => a - b);
+        const rows: DistributionBin[] = sortedVals.map(val => {
+          const label = Number.isInteger(val) ? String(val) : val.toFixed(2);
+          return {
             binRange: label,
             binLabel: label,
-            count: counts[i],
-            minVal: start,
-            maxVal: end,
-          });
-        }
+            category_label: label,
+            count: valueCounts.get(val) || 0,
+            minVal: val,
+            maxVal: val
+          };
+        });
+        return { isNumeric: true, type: 'discrete', rows, totalCount: numericVals.length, excludedCount };
       }
+
+      // Constant values: 1 constant-value bin; never divide by zero
+      if (min === max || numericVals.length <= 1) {
+        const label = Number.isInteger(min) ? String(min) : min.toFixed(2);
+        return {
+          isNumeric: true,
+          type: 'continuous',
+          totalCount: numericVals.length,
+          excludedCount,
+          rows: [{
+            binRange: label,
+            binLabel: label,
+            count: numericVals.length,
+            minVal: min,
+            maxVal: max
+          }]
+        };
+      }
+
+      // Adaptive bin count: B = min(20, max(1, min(N, min(D, ceil(log2(N) + 1)))))
+      const sturges = Math.ceil(Math.log2(numericVals.length) + 1);
+      const binCount = Math.min(20, Math.max(1, Math.min(numericVals.length, Math.min(distinctCount, sturges))));
+      const binWidth = (max - min) / binCount;
+      const counts = new Array(binCount).fill(0);
+
+      for (let i = 0; i < numericVals.length; i++) {
+        const v = numericVals[i];
+        const binIndex = Math.min(binCount - 1, Math.max(0, Math.floor((v - min) / binWidth)));
+        counts[binIndex]++;
+      }
+
+      const rows: DistributionBin[] = [];
+      for (let i = 0; i < binCount; i++) {
+        const start = min + i * binWidth;
+        const end = (i === binCount - 1) ? max : start + binWidth;
+        const label = `${start.toFixed(1)} - ${end.toFixed(1)}`;
+        rows.push({
+          binRange: label,
+          binLabel: label,
+          count: counts[i],
+          minVal: start,
+          maxVal: end
+        });
+      }
+
+      return { isNumeric: true, type: 'continuous', rows, totalCount: numericVals.length, excludedCount };
     } else {
-      // Add numeric values as strings if non-numeric classification
       for (let i = 0; i < numericVals.length; i++) {
         const s = String(numericVals[i]);
         categoricalCounts[s] = (categoricalCounts[s] || 0) + 1;
       }
-
-      for (const [key, count] of Object.entries(categoricalCounts)) {
-        distributionRows.push({
+      const rows: DistributionBin[] = Object.entries(categoricalCounts)
+        .map(([key, count]) => ({
           binRange: key,
           binLabel: key,
           category_label: key,
-          count,
-        });
-      }
-      distributionRows.sort((a, b) => b.count - a.count);
-    }
+          count
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 50);
 
-    return {
-      isNumeric,
-      rows: distributionRows,
-      totalCount: presentCount
-    };
+      return { isNumeric: false, type: 'discrete', rows, totalCount: presentCount, excludedCount: 0 };
+    }
   },
 
-  ranking(source: DataSource | any[], metric: string, limit: number, groupBy?: string): any[] {
+    ranking(source: DataSource | any[], metric: string, limit: number, groupBy?: string): any[] {
     const rows = extractRows(source);
     if (groupBy) {
       const groups = (this.groupedAggregate(rows, metric, groupBy) as GroupedAggregateRow[]);

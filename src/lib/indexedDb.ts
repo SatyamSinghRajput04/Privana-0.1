@@ -171,7 +171,7 @@ export const localDB = {
     if (record.csvContent) {
       // Detect legacy 10-line preview: if expected rowCount is high but string has <= 15 lines
       const lineCount = (record.csvContent.match(/\n/g) || []).length;
-      const isLegacy = Boolean(rowCount && rowCount > 50 && lineCount <= 15);
+      const isLegacy = Boolean(rowCount && rowCount > 50 && lineCount <= 100);
       const file = new File([record.csvContent], name, { type: 'text/csv' });
       return { file, rowCount, isLegacy };
     }

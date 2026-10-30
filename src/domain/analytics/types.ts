@@ -35,6 +35,7 @@ export interface AnalysisPlan {
   intent: AnalysisIntent;
   metric?: string;
   groupBy?: string[];
+  aggregation?: 'AVG' | 'SUM' | 'COUNT' | 'MIN' | 'MAX';
   filters?: Filter[];
   target?: string;
   limit?: number;
@@ -48,7 +49,13 @@ export interface ExecutionProvenance {
   scope?: 'full-dataset' | 'sampled';
   datasetId?: string;
   totalLoadedRows?: number;
+  scannedRows?: number;
   eligibleRows?: number;
+  excludedRows?: number;
+  datasetFingerprint?: string;
+  computationStatus?: 'completed' | 'partial' | 'failed';
+  disclosureStatus?: 'clean' | 'suppressed_low_n';
+  dataQualityStatus?: 'clean' | 'nulls_filtered' | 'type_coerced';
   executionTimeMs: number;
   executedAtIso?: string;
   status?: 'success' | 'partial' | 'failed';
@@ -164,7 +171,16 @@ export interface SeriesSpec {
 
 export type GroupedAveragesPayload = { category: string; value: number }[];
 export type ComparisonSummaryPayload = { category: string; value: number }[];
-export type RankingSummaryPayload = { category: string; value: number }[];
+export type RankingSummaryPayload = {
+  category: string;
+  value: number;
+  rank?: number;
+  sharePct?: number | null;
+  relativeDiffPct?: number | null;
+  recordCount?: number;
+  validCount?: number;
+  isSuppressed?: boolean;
+}[];
 export type FeatureImportancePayload = { feature: string; association: number; method?: string }[];
 export type CorrelationPayload = { x: number; y: number }[];
 export type TableRowsPayload = any[];

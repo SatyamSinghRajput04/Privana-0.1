@@ -116,6 +116,19 @@ export const SlotResolver = {
 
       if (numeric) result.metric = numeric.columnName;
       if (categorical) result.groupBy = [categorical.columnName];
+
+      // Disambiguate explicit aggregation intent from the query text
+      if (/\b(?:total|sum|summed|aggregate)\b/i.test(cleanQ)) {
+        result.aggregation = 'SUM';
+      } else if (/\b(?:average|mean|avg|typical)\b/i.test(cleanQ)) {
+        result.aggregation = 'AVG';
+      } else if (/\b(?:count|frequency|how many|number of)\b/i.test(cleanQ)) {
+        result.aggregation = 'COUNT';
+      } else if (/\b(?:maximum|max|highest|peak)\b/i.test(cleanQ)) {
+        result.aggregation = 'MAX';
+      } else if (/\b(?:minimum|min|lowest)\b/i.test(cleanQ)) {
+        result.aggregation = 'MIN';
+      }
     } else if (intent === 'distribution') {
       // Distribution needs a single column
       if (availableCols.length > 0) {

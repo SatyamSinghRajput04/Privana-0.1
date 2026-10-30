@@ -18,7 +18,8 @@ import { DataSource, ComputeEngine,
   MomentsRequest,
   BinaryEncoding,
   DistributionBin,
-  DistributionResult } from '../ComputeEngine';
+  DistributionResult,
+  Aggregation } from '../ComputeEngine';
 import { inMemoryComputeEngine } from '../inMemoryComputeEngine';
 import { pearsonFromMoments } from '../../safeCompute/relationshipRanker';
 import { DUCKDB_TABLES } from '../../../lib/sqlEngine';
@@ -65,13 +66,14 @@ export class DuckDBComputeEngine implements ComputeEngine {
   groupedAggregate(
     source: DataSource | any[],
     metric: string,
-    groupBy: string
+    groupBy: string,
+    aggregation?: Aggregation
   ): any {
     const res = resolveSource(source);
     if (res.isTable) {
-      return this.queryGroupedAggregate(res.tableName, metric, groupBy);
+      return this.queryGroupedAggregate(res.tableName, metric, groupBy, aggregation);
     }
-    return inMemoryComputeEngine.groupedAggregate(res.rows, metric, groupBy);
+    return inMemoryComputeEngine.groupedAggregate(res.rows, metric, groupBy, aggregation);
   }
 
   profilePair(
@@ -170,7 +172,8 @@ export class DuckDBComputeEngine implements ComputeEngine {
   async queryGroupedAggregate(
     tableNameOrRows: string | any[],
     metric: string,
-    groupBy: string
+    groupBy: string,
+    aggregation?: Aggregation
   ): Promise<GroupedAggregateRow[]> {
     const conn = await getDuckDBConnection();
     const isScratch = typeof tableNameOrRows !== 'string';
@@ -182,26 +185,40 @@ export class DuckDBComputeEngine implements ComputeEngine {
     }
 
     try {
+      const aggExpr = aggregation === 'SUM' ? `COALESCE(SUM(TRY_CAST("${metric}" AS DOUBLE)), 0)`
+        : aggregation === 'COUNT' ? `COUNT(CASE WHEN TRY_CAST("${metric}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${metric}" AS DOUBLE)) THEN 1 END)`
+        : aggregation === 'MIN' ? `COALESCE(MIN(TRY_CAST("${metric}" AS DOUBLE)), 0)`
+        : aggregation === 'MAX' ? `COALESCE(MAX(TRY_CAST("${metric}" AS DOUBLE)), 0)`
+        : `COALESCE(AVG(TRY_CAST("${metric}" AS DOUBLE)), 0)`;
+
       const sql = `
         SELECT 
           CAST("${groupBy}" AS VARCHAR) AS category_label,
-          AVG(TRY_CAST("${metric}" AS DOUBLE)) AS average_value,
-          COUNT(*) AS count
+          ${aggExpr} AS aggregate_value,
+          COALESCE(AVG(TRY_CAST("${metric}" AS DOUBLE)), 0) AS average_value,
+          COUNT(*)::BIGINT AS record_count,
+          COUNT(CASE WHEN TRY_CAST("${metric}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${metric}" AS DOUBLE)) THEN 1 END)::BIGINT AS valid_count
         FROM ${table}
         WHERE "${groupBy}" IS NOT NULL AND CAST("${groupBy}" AS VARCHAR) != ''
-          AND TRY_CAST("${metric}" AS DOUBLE) IS NOT NULL
-        GROUP BY "${groupBy}";
+        GROUP BY 1;
       `;
 
       const result = await conn.query(sql);
       const rows: GroupedAggregateRow[] = [];
       
-      // Convert compact RecordBatch to plain JS objects (typically 5-50 items)
       for (let i = 0; i < result.numRows; i++) {
+        const cat = String(result.getChild('category_label')?.get(i) ?? '');
+        const aggVal = Number(result.getChild('aggregate_value')?.get(i) ?? 0);
+        const avgVal = Number(result.getChild('average_value')?.get(i) ?? 0);
+        const recCount = Number(result.getChild('record_count')?.get(i) ?? 0);
+        const valCount = Number(result.getChild('valid_count')?.get(i) ?? 0);
         rows.push({
-          category_label: String(result.getChild('category_label')?.get(i) ?? ''),
-          average_value: Number(result.getChild('average_value')?.get(i) ?? 0),
-          count: Number(result.getChild('count')?.get(i) ?? 0)
+          category_label: cat,
+          aggregate_value: aggVal,
+          average_value: avgVal,
+          record_count: recCount,
+          valid_count: valCount,
+          count: valCount
         });
       }
 
@@ -353,14 +370,13 @@ export class DuckDBComputeEngine implements ComputeEngine {
     }
 
     try {
-      // 1. Gather column statistics to distinguish numeric vs categorical
       const statsSql = `
         SELECT 
-          COUNT(*) AS total_count,
-          COUNT(TRY_CAST("${column}" AS DOUBLE)) AS numeric_count,
+          COUNT(*)::BIGINT AS total_count,
+          COUNT(CASE WHEN TRY_CAST("${column}" AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST("${column}" AS DOUBLE)) THEN 1 END)::BIGINT AS numeric_count,
           MIN(TRY_CAST("${column}" AS DOUBLE)) AS min_val,
           MAX(TRY_CAST("${column}" AS DOUBLE)) AS max_val,
-          COUNT(DISTINCT "${column}") AS approx_distinct
+          COUNT(DISTINCT "${column}")::BIGINT AS approx_distinct
         FROM ${table}
         WHERE "${column}" IS NOT NULL AND CAST("${column}" AS VARCHAR) != '';
       `;
@@ -371,25 +387,56 @@ export class DuckDBComputeEngine implements ComputeEngine {
       const minVal = Number(statsRes.getChild('min_val')?.get(0) ?? 0);
       const maxVal = Number(statsRes.getChild('max_val')?.get(0) ?? 0);
       const distinctCount = Number(statsRes.getChild('approx_distinct')?.get(0) ?? 0);
+      const excludedCount = totalCount - numericCount;
 
       if (totalCount === 0) {
-        return { isNumeric: false, rows: [], totalCount: 0 };
+        return { isNumeric: false, rows: [], totalCount: 0, excludedCount: 0 };
       }
 
-      const hasNonInteger = !Number.isInteger(minVal) || !Number.isInteger(maxVal);
-      const isNumeric = numericCount > 0 &&
-                        (numericCount / totalCount) > 0.8 &&
-                        (distinctCount > 10 || hasNonInteger);
+      const isNumeric = numericCount > 0 && (numericCount / totalCount) > 0.8;
 
       if (isNumeric) {
-        const range = maxVal - minVal;
-        if (range === 0) {
+        // Discrete frequency branch: D <= 5 (one bucket per distinct value with exact labels)
+        if (distinctCount <= 5 && distinctCount > 0) {
+          const discreteSql = `
+            SELECT 
+              TRY_CAST("${column}" AS DOUBLE) AS val,
+              COUNT(*)::BIGINT AS count
+            FROM ${table}
+            WHERE TRY_CAST("${column}" AS DOUBLE) IS NOT NULL 
+              AND isfinite(TRY_CAST("${column}" AS DOUBLE))
+            GROUP BY 1
+            ORDER BY 1 ASC;
+          `;
+          const discRes = await conn.query(discreteSql);
+          const rows: DistributionBin[] = [];
+          for (let i = 0; i < discRes.numRows; i++) {
+            const v = Number(discRes.getChild('val')?.get(i) ?? 0);
+            const cnt = Number(discRes.getChild('count')?.get(i) ?? 0);
+            const label = Number.isInteger(v) ? String(v) : v.toFixed(2);
+            rows.push({
+              binRange: label,
+              binLabel: label,
+              category_label: label,
+              count: cnt,
+              minVal: v,
+              maxVal: v
+            });
+          }
+          return { isNumeric: true, type: 'discrete', rows, totalCount: numericCount, excludedCount };
+        }
+
+        // Constant values: 1 constant-value bin; never divide by zero
+        if (minVal === maxVal || numericCount <= 1) {
+          const label = Number.isInteger(minVal) ? String(minVal) : minVal.toFixed(2);
           return {
             isNumeric: true,
+            type: 'continuous',
             totalCount: numericCount,
+            excludedCount,
             rows: [{
-              binRange: `${minVal}`,
-              binLabel: `${minVal}`,
+              binRange: label,
+              binLabel: label,
               count: numericCount,
               minVal,
               maxVal
@@ -397,30 +444,24 @@ export class DuckDBComputeEngine implements ComputeEngine {
           };
         }
 
-        const binCount = Math.ceil(Math.log2(numericCount) + 1);
-        const binWidth = range / binCount;
+        // Adaptive bin count: B = min(20, max(1, min(N, min(D, ceil(log2(N) + 1)))))
+        const sturges = Math.ceil(Math.log2(numericCount) + 1);
+        const binCount = Math.min(20, Math.max(1, Math.min(numericCount, Math.min(distinctCount, sturges))));
+        const binWidth = (maxVal - minVal) / binCount;
 
-        // In DuckDB, values equal to maxVal fall into bucket binCount + 1 by default.
-        // We clamp bucket index with LEAST / GREATEST / CASE so [minVal, maxVal]
-        // strictly maps into buckets [1, binCount].
+        // Zero-based bin indexing SQL: LEAST(B-1, GREATEST(0, FLOOR((x - min) / w)))
         const binSql = `
           SELECT 
-            CASE 
-              WHEN TRY_CAST("${column}" AS DOUBLE) <= ${minVal} THEN 1
-              WHEN TRY_CAST("${column}" AS DOUBLE) >= ${maxVal} THEN ${binCount}
-              ELSE LEAST(
-                GREATEST(
-                  WIDTH_BUCKET(TRY_CAST("${column}" AS DOUBLE), ${minVal}, ${maxVal}, ${binCount}),
-                  1
-                ),
-                ${binCount}
-              )
-            END AS b_idx,
-            COUNT(*) AS count
+            LEAST(
+              ${binCount - 1}, 
+              GREATEST(0, FLOOR((TRY_CAST("${column}" AS DOUBLE) - ${minVal}) / ${binWidth})::BIGINT)
+            ) AS b_idx,
+            COUNT(*)::BIGINT AS count
           FROM ${table}
-          WHERE TRY_CAST("${column}" AS DOUBLE) IS NOT NULL
-          GROUP BY b_idx
-          ORDER BY b_idx;
+          WHERE TRY_CAST("${column}" AS DOUBLE) IS NOT NULL 
+            AND isfinite(TRY_CAST("${column}" AS DOUBLE))
+          GROUP BY 1
+          ORDER BY 1;
         `;
 
         const binRes = await conn.query(binSql);
@@ -439,19 +480,19 @@ export class DuckDBComputeEngine implements ComputeEngine {
           rows.push({
             binRange: label,
             binLabel: label,
-            count: bucketMap.get(i + 1) || 0,
+            count: bucketMap.get(i) || 0,
             minVal: start,
             maxVal: end
           });
         }
 
-        return { isNumeric: true, rows, totalCount: numericCount };
+        return { isNumeric: true, type: 'continuous', rows, totalCount: numericCount, excludedCount };
       } else {
         // Categorical distribution pushdown (top 50 categories)
         const catSql = `
           SELECT 
             CAST("${column}" AS VARCHAR) AS cat_val,
-            COUNT(*) AS count
+            COUNT(*)::BIGINT AS count
           FROM ${table}
           WHERE "${column}" IS NOT NULL AND CAST("${column}" AS VARCHAR) != ''
           GROUP BY 1
@@ -472,7 +513,7 @@ export class DuckDBComputeEngine implements ComputeEngine {
           });
         }
 
-        return { isNumeric: false, rows, totalCount };
+        return { isNumeric: false, type: 'discrete', rows, totalCount, excludedCount: 0 };
       }
     } finally {
       if (isScratch) {

@@ -28,10 +28,15 @@ export type DataSource =
 
 export type MaybePromise<T> = T | Promise<T>;
 
+export type Aggregation = 'AVG' | 'SUM' | 'COUNT' | 'MIN' | 'MAX';
+
 export interface GroupedAggregateRow {
   category_label: string;
+  aggregate_value: number;
   average_value: number;
-  count: number;
+  record_count: number;
+  valid_count: number;
+  count: number; // backward compatibility (= valid_count)
 }
 
 export interface DistributionBin {
@@ -41,12 +46,15 @@ export interface DistributionBin {
   minVal?: number;
   maxVal?: number;
   category_label?: string;
+  isSuppressed?: boolean;
 }
 
 export interface DistributionResult {
   isNumeric: boolean;
+  type?: 'continuous' | 'discrete';
   rows: DistributionBin[];
   totalCount: number;
+  excludedCount?: number;
 }
 
 /**
@@ -174,7 +182,8 @@ export interface ComputeEngine {
   groupedAggregate(
     source: DataSource | any[],
     metric: string,
-    groupBy: string
+    groupBy: string,
+    aggregation?: Aggregation
   ): MaybePromise<GroupedAggregateRow[]>;
 
   /**

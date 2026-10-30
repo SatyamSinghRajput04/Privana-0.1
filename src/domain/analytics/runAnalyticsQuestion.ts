@@ -87,19 +87,28 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
   const isDuckDB = Boolean(sqlTable && DUCKDB_TABLES.has(sqlTable));
   const totalLoaded = isDuckDB ? (DUCKDB_ROW_COUNTS.get(sqlTable) || ctx.totalRowCount || rows.length) : (ctx.totalRowCount || rows.length);
 
-  const buildProvenance = (customStatus?: 'success' | 'partial' | 'failed', eligibleRowsCount?: number) => ({
-    question,
-    planGeneratedAt: new Date(),
-    executionTimeMs: Date.now() - startTime,
-    plannerAttempts: 1,
-    engine: isDuckDB ? ('duckdb-wasm' as const) : ('in-memory' as const),
-    scope: isDuckDB ? ('full-dataset' as const) : ('sampled' as const),
-    datasetId: tableName,
-    totalLoadedRows: totalLoaded,
-    eligibleRows: eligibleRowsCount !== undefined ? eligibleRowsCount : totalLoaded,
-    executedAtIso: new Date().toISOString(),
-    status: customStatus || 'success'
-  });
+  const buildProvenance = (customStatus?: 'success' | 'partial' | 'failed', eligibleRowsCount?: number) => {
+    const eligible = eligibleRowsCount !== undefined ? eligibleRowsCount : totalLoaded;
+    return {
+      question,
+      planGeneratedAt: new Date(),
+      executionTimeMs: Date.now() - startTime,
+      plannerAttempts: 1,
+      engine: isDuckDB ? ('duckdb-wasm' as const) : ('in-memory' as const),
+      scope: isDuckDB ? ('full-dataset' as const) : ('sampled' as const),
+      datasetId: tableName,
+      totalLoadedRows: totalLoaded,
+      scannedRows: totalLoaded,
+      eligibleRows: eligible,
+      excludedRows: Math.max(0, totalLoaded - eligible),
+      datasetFingerprint: `${tableName}:${totalLoaded}`,
+      computationStatus: customStatus === 'failed' ? ('failed' as const) : customStatus === 'partial' ? ('partial' as const) : ('completed' as const),
+      disclosureStatus: 'clean' as const,
+      dataQualityStatus: 'clean' as const,
+      executedAtIso: new Date().toISOString(),
+      status: customStatus || 'success'
+    };
+  };
 
   // ─────────────────────────────────────────────────────────────
   // ORDER IS LOAD-BEARING. DO NOT REORDER THESE BLOCKS.
@@ -154,6 +163,7 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
       intent: plannedIntent.intent,
       metric: resolvedSlots.metric,
       groupBy: resolvedSlots.groupBy,
+      aggregation: resolvedSlots.aggregation,
       filters: resolvedSlots.filters,
       target: resolvedSlots.target,
       limit: resolvedSlots.limit,
@@ -222,25 +232,37 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     }
 
     if (plan.confidence >= 0.60 && plan.confidence < 0.85) {
-      // Clarify state: build dynamic choices based on what was resolved.
-      // Fall back to the first numeric column in the profile (not a hardcoded field name).
       const firstNumericCol = profile?.columns?.find((c: any) => c.type === 'numeric')?.name;
       const clarifyMetric = plan.metric || firstNumericCol || 'a numeric column';
       const clarifyGroupBy = plan.groupBy?.[0] || profile?.columns?.find((c: any) => c.type === 'category' || c.type === 'text')?.name;
 
-      const choices: ClarificationChoice[] = [
-        {
+      const choices: ClarificationChoice[] = [];
+      if (plan.intent === 'ranking' && clarifyGroupBy && clarifyMetric) {
+        choices.push(
+          {
+            label: `Rank ${clarifyGroupBy} by Total ${clarifyMetric} (SUM)`,
+            plan: { ...plan, intent: 'ranking' as const, aggregation: 'SUM', metric: clarifyMetric, groupBy: [clarifyGroupBy], confidence: 0.95 },
+            question: `Rank ${clarifyGroupBy} by total ${clarifyMetric}`
+          },
+          {
+            label: `Rank ${clarifyGroupBy} by Average ${clarifyMetric} (AVG)`,
+            plan: { ...plan, intent: 'ranking' as const, aggregation: 'AVG', metric: clarifyMetric, groupBy: [clarifyGroupBy], confidence: 0.95 },
+            question: `Rank ${clarifyGroupBy} by average ${clarifyMetric}`
+          }
+        );
+      } else {
+        choices.push({
           label: `Compute distribution of ${clarifyMetric}`,
           plan: { ...plan, intent: 'distribution' as const, metric: plan.metric || firstNumericCol, confidence: 0.95 },
           question: `Show the distribution of ${clarifyMetric}`,
-        },
-      ];
-      if (clarifyMetric && clarifyGroupBy) {
-        choices.push({
-          label: `Calculate average ${clarifyMetric} grouped by ${clarifyGroupBy}`,
-          plan: { ...plan, intent: 'grouped_average' as const, metric: plan.metric || firstNumericCol, groupBy: plan.groupBy?.length ? plan.groupBy : [clarifyGroupBy], confidence: 0.95 },
-          question: `Which ${clarifyGroupBy} has the highest average ${clarifyMetric}?`,
         });
+        if (clarifyMetric && clarifyGroupBy) {
+          choices.push({
+            label: `Calculate average ${clarifyMetric} grouped by ${clarifyGroupBy}`,
+            plan: { ...plan, intent: 'grouped_average' as const, metric: plan.metric || firstNumericCol, groupBy: plan.groupBy?.length ? plan.groupBy : [clarifyGroupBy], confidence: 0.95 },
+            question: `Which ${clarifyGroupBy} has the highest average ${clarifyMetric}?`,
+          });
+        }
       }
       return {
         status: 'clarify',
@@ -474,29 +496,34 @@ export async function runAnalyticsQuestion(question: string, ctx: AnalyticsConte
     }
 
     const reasons: string[] = [];
-    if (execResult.status === 'partial_small_n') {
-      reasons.push('Some groups contain fewer than 5 records. Frequencies or statistics for these groups might be suppressed or unreliable.');
+    let disclosureStatus: 'clean' | 'suppressed_low_n' = 'clean';
+    if (execResult.status === 'partial_small_n' || (execResult.metadata?.suppressedGroupsCount ?? 0) > 0) {
+      disclosureStatus = 'suppressed_low_n';
     }
     if (isMetadataWarningNeeded) {
       reasons.push(METADATA_BYPASS_WARNING);
     }
 
     const eligibleCount = execResult.metadata?.totalEligibleRows ?? totalLoaded;
-    const finalResult: AnalyticsResult = reasons.length > 0 ? {
+    const isPartialExecution = reasons.length > 0;
+    const provBase = buildProvenance(isPartialExecution ? 'partial' : 'success', eligibleCount);
+    const provWithSDC = { ...provBase, disclosureStatus };
+
+    const finalResult: AnalyticsResult = isPartialExecution ? {
       status: 'partial',
       plan,
       data: execResult,
       chart: chartSpec,
       narrative,
       reasons,
-      provenance: buildProvenance('partial', eligibleCount),
+      provenance: provWithSDC,
     } : {
       status: 'computed',
       plan,
       data: execResult,
       chart: chartSpec,
       narrative,
-      provenance: buildProvenance('success', eligibleCount),
+      provenance: provWithSDC,
     };
 
     try {

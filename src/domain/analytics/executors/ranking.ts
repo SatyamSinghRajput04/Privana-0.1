@@ -1,16 +1,29 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // src/domain/analytics/executors/ranking.ts
-// S8f RANKING EXECUTOR — Ranks category groups by a metric (Top-N).
+// S8f RANKING EXECUTOR — Universal, deterministic Top-N ranking engine.
+// Supports multi-aggregation (SUM, AVG, COUNT, MIN, MAX), standard competition
+// ties (1224), dataset-wide non-negative share & SDC protection.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AnalysisPlan, ExecutorResult } from '../types';
-import { GroupedAverageExecutor } from './groupedAverage';
-import { computeEngine, ComputeEngine, DataSource, MaybePromise } from '../../compute';
+import { computeEngine, ComputeEngine, DataSource, MaybePromise, GroupedAggregateRow, Aggregation } from '../../compute';
+
+export interface RankedRow {
+  rank: number;
+  category_label: string;
+  metric_value: number;
+  aggregate_value: number;
+  average_value: number;
+  record_count: number;
+  valid_count: number;
+  share_pct?: number | null;
+  relative_diff_pct?: number | null;
+  isSuppressed?: boolean;
+}
 
 export const RankingExecutor = {
   /**
-   * Computes top-N records or groups ordered by plan.metric.
-   * Agnostic to data storage: accepts either in-memory row array or DuckDB table source.
+   * Computes top-N records or groups ordered by plan.metric with explicit aggregation semantics.
    */
   execute(
     plan: AnalysisPlan,
@@ -27,7 +40,7 @@ export const RankingExecutor = {
       return { status: 'partial_missing', rows: [] };
     }
 
-    // Default to a safe dashboard-sized Top 5 unless the query explicitly asks for a small limit.
+    // Default to a safe dashboard-sized Top 5 unless the query explicitly asks for a specific limit.
     let limit = typeof plan.limit === 'number' && Number.isFinite(plan.limit)
       ? Math.min(Math.max(Math.floor(plan.limit), 1), 50)
       : 5;
@@ -43,33 +56,103 @@ export const RankingExecutor = {
       }
     }
 
-    if (groupBy && groupBy.length > 0) {
-      // Grouped ranking (e.g. top payment types by average payment value)
-      const resOrPromise = GroupedAverageExecutor.execute(plan, source, engine);
+    const aggregation: Aggregation = plan.aggregation || 'SUM';
 
-      const formatGrouped = (groupRes: ExecutorResult): ExecutorResult => {
-        if (groupRes.status === 'partial_missing') {
-          return groupRes;
+    if (groupBy && groupBy.length > 0) {
+      const groupCol = groupBy[0];
+      const resOrPromise = engine.groupedAggregate(source, metric, groupCol, aggregation);
+
+      const processGrouped = (rawGroups: GroupedAggregateRow[]): ExecutorResult => {
+        if (!rawGroups || rawGroups.length === 0) {
+          return { status: 'partial_missing', rows: [] };
         }
+
+        // Sort descending by aggregate_value
+        const sorted = [...rawGroups].sort((a, b) => {
+          const valA = Number.isFinite(a.aggregate_value) ? a.aggregate_value : a.average_value;
+          const valB = Number.isFinite(b.aggregate_value) ? b.aggregate_value : b.average_value;
+          return valB - valA;
+        });
+
+        // Calculate dataset-wide totals across all categories (not just top-5)
+        const totalEligibleRows = sorted.reduce((acc, r) => acc + (r.valid_count || r.count || 0), 0);
+        const totalScannedRows = sorted.reduce((acc, r) => acc + (r.record_count || r.count || 0), 0);
+        const grandTotal = sorted.reduce((acc, r) => acc + (r.aggregate_value || 0), 0);
+        const grandMeanSum = sorted.reduce((acc, r) => acc + (r.average_value || 0) * (r.valid_count || r.count || 0), 0);
+        const grandMean = totalEligibleRows > 0 ? grandMeanSum / totalEligibleRows : 0;
+
+        // Share calculation safety check: only valid if grandTotal > 0 and no negative values
+        const hasNegative = sorted.some(r => r.aggregate_value < 0);
+        const canComputeShare = aggregation === 'SUM' && !hasNegative && grandTotal > 0;
+
+        // Standard competition ranking (1224 ties)
+        let currentRank = 1;
+        let suppressedCount = 0;
+
+        const rankedAll: RankedRow[] = sorted.map((row, idx) => {
+          const val = Number.isFinite(row.aggregate_value) ? row.aggregate_value : row.average_value;
+          if (idx > 0) {
+            const prevVal = Number.isFinite(sorted[idx - 1].aggregate_value)
+              ? sorted[idx - 1].aggregate_value
+              : sorted[idx - 1].average_value;
+            if (Math.abs(val - prevVal) > 1e-9) {
+              currentRank = idx + 1;
+            }
+          }
+
+          const isValidLowN = (row.valid_count !== undefined ? row.valid_count : row.count) < 5;
+          if (isValidLowN) suppressedCount++;
+
+          const sharePct = canComputeShare
+            ? Number(((val / grandTotal) * 100).toFixed(2))
+            : null;
+
+          const relativeDiffPct = (aggregation === 'AVG' && grandMean !== 0)
+            ? Number((((val - grandMean) / Math.abs(grandMean)) * 100).toFixed(2))
+            : null;
+
+          return {
+            rank: currentRank,
+            category_label: row.category_label,
+            metric_value: val,
+            aggregate_value: val,
+            average_value: row.average_value,
+            record_count: row.record_count || row.count,
+            valid_count: row.valid_count || row.count,
+            share_pct: sharePct,
+            relative_diff_pct: relativeDiffPct,
+            isSuppressed: isValidLowN
+          };
+        });
+
+        const displayedRows = rankedAll.slice(0, limit);
+
         return {
-          status: groupRes.status,
-          rows: groupRes.rows.slice(0, limit),
+          status: 'success',
+          rows: displayedRows,
           metadata: {
             metric,
-            ...groupRes.metadata,
             limit,
-            isGrouped: true
+            isGrouped: true,
+            aggregation,
+            totalEligibleRows,
+            totalScannedRows,
+            grandTotal,
+            grandMean,
+            suppressedGroupsCount: suppressedCount,
+            canComputeShare,
+            allCategoriesCount: sorted.length
           }
         };
       };
 
       if (resOrPromise instanceof Promise) {
-        return resOrPromise.then(formatGrouped);
+        return resOrPromise.then(processGrouped);
       }
-      return formatGrouped(resOrPromise);
+      return processGrouped(resOrPromise);
     }
 
-    // Individual record ranking (e.g. top 5 records by payment_value)
+    // Individual record ranking fallback
     if (engine.ranking) {
       const resOrPromise = engine.ranking(source, metric, limit);
 
@@ -78,7 +161,7 @@ export const RankingExecutor = {
           return { status: 'partial_missing', rows: [] };
         }
         return {
-          status: rankedRows.length < 5 ? 'partial_small_n' : 'success',
+          status: 'success',
           rows: rankedRows,
           metadata: {
             metric,
@@ -95,40 +178,6 @@ export const RankingExecutor = {
       return formatRanked(resOrPromise);
     }
 
-    // Fallback if engine does not implement ranking: in-memory row projection
-    const rows = Array.isArray(source) ? source : (source.kind === 'in-memory-rows' ? source.rows : []);
-    const topN: any[] = [];
-    let validCount = 0;
-
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      const v = r[metric];
-      if (v === null || v === undefined || v === '') continue;
-      const numV = Number(v);
-      if (isNaN(numV)) continue;
-
-      validCount++;
-      const labelKey = Object.keys(r).find(k => k.toLowerCase() === 'name' || k.toLowerCase() === 'title' || k.toLowerCase() === 'label') || 'id';
-      const projectedItem: Record<string, any> = {
-        id: r.id,
-        [metric]: numV,
-        metric_value: numV
-      };
-      if (r[labelKey] !== undefined) projectedItem[labelKey] = r[labelKey];
-
-      if (topN.length < limit) {
-        topN.push(projectedItem);
-        topN.sort((a, b) => b.metric_value - a.metric_value);
-      } else if (numV > topN[topN.length - 1].metric_value) {
-        topN[topN.length - 1] = projectedItem;
-        topN.sort((a, b) => b.metric_value - a.metric_value);
-      }
-    }
-
-    return {
-      status: validCount < 5 ? 'partial_small_n' : 'success',
-      rows: topN.map((row, idx) => ({ ...row, rank_label: row.id ? String(row.id) : `Rank ${idx + 1}` })),
-      metadata: { metric, limit, isGrouped: false }
-    };
+    return { status: 'partial_missing', rows: [] };
   }
 };

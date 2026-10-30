@@ -151,12 +151,12 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
         return hydration;
       }
 
-      // If stale preview detected, reject immediately (Fail-Closed guarantee)
-      if (hydration.error === 'STALE_PREVIEW_DETECTED') {
+      // Fail-closed guarantee: Never silently fall back to an old preview slice for tables with >50 rows
+      if (hydration.error === 'STALE_PREVIEW_DETECTED' || (ds.row_count && ds.row_count > 50)) {
         return hydration;
       }
 
-      // 2. Secondary fallback for JSON or non-DuckDB small in-memory files
+      // 2. Secondary fallback for JSON or tiny in-memory files (<= 50 rows)
       let text = await localDB.getDatasetCSV(tableName);
       if (!text) {
         text = await localDB.getDatasetCSV(getSqlTableName(tableName));
@@ -228,8 +228,12 @@ export default function AnalyzePage({ page, onMenu }: AnalyzePageProps) {
 
       const hydration = await ensureTableLoaded(selectedDataset);
       if (!hydration.ok) {
-        if (hydration.error === 'STALE_PREVIEW_DETECTED') {
-          setQaResponse(`⚠️ Legacy Preview Detected\n\n"${selectedDataset.name}" was stored as an older 10-row preview in your browser.\n\nPlease go to the Datasets tab and re-upload "${selectedDataset.name}" to enable 100% full-population DuckDB analytics.`);
+        if (hydration.error === 'STALE_PREVIEW_DETECTED' || hydration.error === 'ROW_COUNT_MISMATCH' || hydration.error === 'FILE_NOT_FOUND_IN_STORAGE') {
+          setQaResponse(
+            `⚠️ Full Dataset Hydration Required\n\n` +
+            `"${selectedDataset.name}" requires full-population DuckDB hydration (${selectedDataset.row_count ? selectedDataset.row_count.toLocaleString() + ' rows' : 'full dataset'}).\n\n` +
+            `Please click below to select and hydrate the full CSV file into local DuckDB.`
+          );
           return;
         }
         throw new Error(hydration.details || `Raw data for "${selectedDataset.name}" could not be loaded.`);

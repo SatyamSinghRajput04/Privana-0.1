@@ -151,14 +151,18 @@ export const IntentPlanner = {
       q.includes('top 5') ||
       q.includes('top 10')
     ) {
+      const hasAggVerb = /\b(?:total|sum|summed|average|mean|avg|typical|count|frequency|how many|number of|max|maximum|min|minimum)\b/i.test(q);
+      const isTopLimit = /\b(?:top|bottom|rank|ranking)[_\s]*\d+/i.test(q) || q.includes('top 5') || q.includes('top 10');
+
       // Check if it's actually grouped average or ranking
       if (q.includes('average') || q.includes('mean') || q.includes('avg')) {
-        if (/\b(?:top|bottom|rank|ranking)[_\s]*\d*/i.test(q) || q.includes('top 5') || q.includes('top 10')) {
+        if (isTopLimit || /\brank/i.test(q)) {
           return { intent: 'ranking', confidence: 0.90 };
         }
         return { intent: 'grouped_average', confidence: 0.85 };
       }
-      return { intent: 'ranking', confidence: 0.90 };
+      // If ambiguous (no aggregation verb and no explicit top-k limit), return 0.75 to prompt user clarification
+      return { intent: 'ranking', confidence: (hasAggVerb || isTopLimit) ? 0.90 : 0.75 };
     }
 
     // 5. Grouped Average

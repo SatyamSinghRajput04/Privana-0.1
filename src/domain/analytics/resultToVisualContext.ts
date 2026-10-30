@@ -43,17 +43,73 @@ export const ResultToVisualContext = {
     // Add general KPIs based on Intent
     if (plan.intent === 'distribution') {
       const total = rawRows.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
+      const topBin = [...rawRows].sort((a: any, b: any) => (b.count || 0) - (a.count || 0))[0];
+      const minV = rawRows[0]?.minVal;
+      const maxV = rawRows[rawRows.length - 1]?.maxVal;
+      const rangeText = (minV !== undefined && maxV !== undefined) ? `${minV.toFixed(1)} to ${maxV.toFixed(1)}` : 'Observed spread';
+
       kpis.push({
-        label: 'Metric Analyzed',
+        label: 'Distribution Target',
         value: plan.metric || '',
-        subText: 'Distribution target',
+        subText: 'Evaluated column',
         color: '#a855f7',
       });
       kpis.push({
-        label: 'Total Sample Size',
-        value: total.toLocaleString(),
-        subText: 'Total records scanned',
+        label: 'Total Scanned',
+        value: (result.provenance?.scannedRows || total).toLocaleString(),
+        subText: '100% full-population',
         color: '#3b82f6',
+      });
+      if (topBin) {
+        kpis.push({
+          label: 'Peak Density',
+          value: topBin.binRange || topBin.binLabel || '',
+          subText: `${Number(topBin.count).toLocaleString()} records in peak`,
+          color: '#10b981',
+        });
+      }
+      kpis.push({
+        label: 'Distribution Range',
+        value: rangeText,
+        subText: `${rawRows.length} distribution buckets`,
+        color: '#f59e0b',
+      });
+    } else if (plan.intent === 'ranking') {
+      const topGroup = rawRows[0];
+      const aggLabel = plan.aggregation === 'AVG' ? 'Average' : plan.aggregation === 'COUNT' ? 'Count' : 'Total';
+      kpis.push({
+        label: 'Top Rank Category',
+        value: topGroup ? (topGroup.category_label || topGroup.category || '') : 'None',
+        subText: '#1 ranked category',
+        color: '#10b981',
+      });
+      if (topGroup) {
+        kpis.push({
+          label: `${aggLabel} Value`,
+          value: typeof topGroup.metric_value === 'number'
+            ? topGroup.metric_value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : typeof topGroup.value === 'number'
+            ? topGroup.value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : '',
+          subText: topGroup.share_pct != null
+            ? `${topGroup.share_pct}% of total`
+            : topGroup.relative_diff_pct != null
+            ? `${topGroup.relative_diff_pct >= 0 ? '+' : ''}${topGroup.relative_diff_pct}% vs avg`
+            : `${aggLabel} ${plan.metric}`,
+          color: '#3b82f6',
+        });
+      }
+      kpis.push({
+        label: 'Categories Ranked',
+        value: (data?.metadata?.allCategoriesCount || rawRows.length).toLocaleString(),
+        subText: `Limit: top ${rawRows.length}`,
+        color: '#f59e0b',
+      });
+      kpis.push({
+        label: 'Eligible Records',
+        value: (data?.metadata?.totalEligibleRows || result.provenance?.eligibleRows || 0).toLocaleString(),
+        subText: 'Full-Dataset Verified',
+        color: '#a855f7',
       });
     } else if (plan.intent === 'grouped_average') {
       const topGroup = rawRows[0];
@@ -67,10 +123,22 @@ export const ResultToVisualContext = {
         kpis.push({
           label: 'Highest Avg Group',
           value: topGroup.category_label || '',
-          subText: `Average: ${Number(topGroup.average_value).toFixed(2)} (n=${topGroup.count})`,
+          subText: `Average: ${Number(topGroup.average_value).toFixed(2)} (n=${(topGroup.valid_count || topGroup.count).toLocaleString()})`,
           color: '#10b981',
         });
       }
+      kpis.push({
+        label: 'Groups Analyzed',
+        value: rawRows.length.toLocaleString(),
+        subText: 'Distinct categories',
+        color: '#3b82f6',
+      });
+      kpis.push({
+        label: 'Eligible Records',
+        value: (data?.metadata?.totalEligibleRows || result.provenance?.eligibleRows || 0).toLocaleString(),
+        subText: '100% Verified Full-Population',
+        color: '#10b981',
+      });
     } else if (plan.intent === 'correlation') {
       const stats = rawRows[0];
       if (stats) {
@@ -211,18 +279,25 @@ export function mapToVisualContract(result: AnalyticsResult): VisualContract {
 
     case 'ranking': {
       const payload = rawRows.map(r => ({
-        category: String(r.rank_label || r.category_label || Object.values(r)[0] || ''),
-        value: Number(r.metric_value ?? r.average_value ?? Object.values(r)[1] ?? 0)
+        category: String(r.category_label || r.rank_label || Object.values(r)[0] || ''),
+        value: Number(r.metric_value ?? r.aggregate_value ?? r.average_value ?? Object.values(r)[1] ?? 0),
+        rank: typeof r.rank === 'number' ? r.rank : undefined,
+        sharePct: r.share_pct ?? null,
+        relativeDiffPct: r.relative_diff_pct ?? null,
+        recordCount: r.record_count,
+        validCount: r.valid_count,
+        isSuppressed: r.isSuppressed ?? false
       }));
+      const aggWord = plan.aggregation === 'AVG' ? 'Average' : plan.aggregation === 'COUNT' ? 'Count' : 'Total';
       return verifyContract({
         kind: 'rankingSummary',
         schemaVersion: 1,
         data: payload,
         xAxis: { ...xAxis, label: formatFieldName(plan.groupBy?.[0] || 'Category') },
-        yAxis: { ...yAxis, label: formatFieldName(`Ranked by ${plan.metric || 'Value'}`) },
-        series: [{ key: 'value', label: formatFieldName(`Ranked by ${plan.metric || 'Value'}`) }],
+        yAxis: { ...yAxis, label: formatFieldName(`${aggWord} ${plan.metric || 'Value'}`) },
+        series: [{ key: 'value', label: formatFieldName(`${aggWord} ${plan.metric || 'Value'}`) }],
         xAxisLabel: plan.groupBy?.[0] || 'Category',
-        yAxisLabel: `Ranked by ${plan.metric || 'Value'}`
+        yAxisLabel: `${aggWord} ${plan.metric || 'Value'}`
       });
     }
 

@@ -119,7 +119,7 @@ export default function AnalyticsCanvas({
           <p style={{ fontSize: '0.82rem', color: '#f4f4f5', margin: 0, whiteSpace: 'pre-line', lineHeight: 1.6 }}>
             {qaResponse}
           </p>
-          {qaResponse.includes('Legacy Preview') && onReupload && (
+          {(qaResponse.includes('Legacy Preview') || qaResponse.includes('Hydration Required')) && onReupload && (
             <button
               onClick={onReupload}
               style={{

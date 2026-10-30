@@ -1291,9 +1291,18 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
               <span className="rounded-full border border-emerald-500/10 bg-emerald-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-emerald-400">
                 Local Sandbox Active
               </span>
-              <span className="rounded-full border border-red-500/10 bg-red-500/5 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-red-400">
+              <span className={`rounded-full border px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] ${
+                isPartial 
+                  ? 'border-red-500/20 bg-red-500/10 text-red-400' 
+                  : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+              }`}>
                 {isPartial ? 'Partial Analytics' : 'Computed Result'}
               </span>
+              {result.provenance?.disclosureStatus === 'suppressed_low_n' && (
+                <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-cyan-400">
+                  🛡️ Privacy Protected (&lt;5 suppressed)
+                </span>
+              )}
             </div>
             <h2 className="mt-3.5 text-lg font-black leading-tight tracking-tight text-zinc-100">
               {formatFieldName(result.plan.intent)} Analytics Cockpit
@@ -1305,8 +1314,10 @@ export const ComputedView: React.FC<ComputedViewProps> = ({ result }) => {
           
           <div className="grid grid-cols-2 gap-2 text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 shrink-0 self-center">
             <div className="rounded-lg bg-zinc-950 border border-zinc-900/60 px-3.5 py-2">
-              <div className="font-bold text-zinc-400">Rows Used</div>
-              <div className="mt-0.5 text-xs font-black text-zinc-200">{(result.data?.rows?.length || 0).toLocaleString()}</div>
+              <div className="font-bold text-zinc-400">Scanned Rows</div>
+              <div className="mt-0.5 text-xs font-black text-zinc-200">
+                {(result.provenance?.scannedRows || result.provenance?.totalLoadedRows || result.data?.metadata?.rowCount || result.data?.rows?.length || 0).toLocaleString()}
+              </div>
             </div>
             <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/10 px-3.5 py-2">
               <div className="font-bold text-emerald-400/60">Privacy</div>

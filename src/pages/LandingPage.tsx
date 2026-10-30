@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useVaultStore } from '../store/useVaultStore';
 import { Shield, Download, Server, Cpu, Database, EyeOff, Key, ArrowRight } from 'lucide-react';
+import { WireframeBackground } from '../components/landing/WireframeBackground';
 
 export default function LandingPage() {
   const { login } = useVaultStore();
@@ -52,8 +53,11 @@ export default function LandingPage() {
       flexDirection: 'column',
       fontFamily: 'var(--ff)',
       color: 'var(--t1)',
-      overflowY: 'auto'
+      overflowY: 'auto',
+      position: 'relative',
+      overflowX: 'hidden'
     }}>
+      <WireframeBackground />
       {/* Navbar */}
       <header style={{
         display: 'flex',
@@ -88,6 +92,8 @@ export default function LandingPage() {
 
       {/* Main Grid Content */}
       <main style={{
+        position: 'relative',
+        zIndex: 1,
         flex: 1,
         display: 'grid',
         gridTemplateColumns: '1.2fr 1fr',
@@ -499,6 +505,8 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer style={{
+        position: 'relative',
+        zIndex: 1,
         padding: '1.5rem 2rem',
         borderTop: '1px solid var(--rim)',
         textAlign: 'center',
